@@ -73,12 +73,12 @@ async function loadCandidatePayees(tx) {
   const seen = new Set();
 
   for (const p of Array.isArray(tx.payables) ? tx.payables : []) {
-    const cpId = p?.carrier_payee?.id;
+    const carrierPayeeId = p?.carrier_payee?.id;
 
-    if (cpId && !seen.has(`id:${cpId}`)) {
-      seen.add(`id:${cpId}`);
+    if (carrierPayeeId && !seen.has(`id:${carrierPayeeId}`)) {
+      seen.add(`id:${carrierPayeeId}`);
       try {
-        const fullPayee = await roadsyncGet(`/payees/${cpId}`, true);
+        const fullPayee = await roadsyncGet(`/payees/${carrierPayeeId}`, true);
         candidates.push({
           source: "payables[].carrier_payee",
           payee: fullPayee,
@@ -87,7 +87,7 @@ async function loadCandidatePayees(tx) {
       } catch (e) {
         candidates.push({
           source: "payables[].carrier_payee_lookup_failed",
-          payee: { id: cpId },
+          payee: { id: carrierPayeeId },
           lookupError: e.message
         });
       }
@@ -180,7 +180,7 @@ app.get("/api/search", async (req, res) => {
           debug: {
             message: "Reference ID matched a transaction, but DOT/MC did not match any related payee record.",
             transactionId: tx.id,
-            referenceId: tx.reference_id || "",
+            referenceId: tx.reference_id || reference || "",
             payeeId: tx.payee_id || tx?.payee?.id || "",
             checkedPayeeSources: candidatePayees.map(c => ({
               source: c.source,
@@ -196,6 +196,7 @@ app.get("/api/search", async (req, res) => {
 
       const payee = matchedCandidate.payee;
       const payables = Array.isArray(tx.payables) ? tx.payables : [];
+      const firstPayable = payables[0] || null;
 
       return res.json({
         carrier: {
@@ -209,9 +210,9 @@ app.get("/api/search", async (req, res) => {
         payments: [
           {
             transactionId: tx.id || "",
-            referenceId: tx.reference_id || "",
-            externalId: tx.external_id || "",
-            transactionStatus: tx.status || "",
+            referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
+            externalId: tx.external_id || firstPayable?.load?.external_id || "",
+            transactionStatus: String(tx.status || "").toUpperCase(),
             amount: tx.amount || "",
             paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
             eta: tx.eta || "",
@@ -220,11 +221,11 @@ app.get("/api/search", async (req, res) => {
             matchedPayeeSource: matchedCandidate.source,
             payables: payables.map(p => ({
               payableId: p.id || "",
-              payableStatus: p.status || "",
-              invoiceNumber: p.invoice_number || "",
+              payableStatus: String(p.status || tx.status || "").toUpperCase(),
+              invoiceNumber: p.invoice_number || reference || "",
               poNumber: p.po_number || "",
               loadId: p.load_id || "",
-              loadNumber: p?.load?.load_number || "",
+              loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
               loadExternalId: p?.load?.external_id || "",
               scheduledForDate: p.scheduled_for_date || "",
               amount: p.amount || ""
