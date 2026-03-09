@@ -14,14 +14,17 @@ function normalize(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 
-async function roadsyncGet(endpoint) {
-  const res = await fetch(`${BASE_URL}${endpoint}`, {
-    headers: {
-      "x-api-key": API_KEY,
-      "broker-id": BROKER_ID,
-      "Content-Type": "application/json"
-    }
-  });
+async function roadsyncGet(endpoint, includeBrokerId = true) {
+  const headers = {
+    "x-api-key": API_KEY,
+    "Content-Type": "application/json"
+  };
+
+  if (includeBrokerId && BROKER_ID) {
+    headers["broker-id"] = BROKER_ID;
+  }
+
+  const res = await fetch(`${BASE_URL}${endpoint}`, { headers });
 
   if (!res.ok) {
     const text = await res.text();
@@ -31,23 +34,8 @@ async function roadsyncGet(endpoint) {
   return res.json();
 }
 
-function getPayeeSummary(payee) {
-  if (!payee) return null;
-  return {
-    id: payee.id ?? null,
-    payee_name: payee.payee_name ?? "",
-    dot_number: payee.dot_number ?? "",
-    mc_number: payee.mc_number ?? "",
-    is_verified: payee.is_verified ?? null,
-    is_factoring_company: payee.is_factoring_company ?? null,
-    available_payment_types: payee.available_payment_types ?? []
-  };
-}
-
 function payeeMatchesDotOrMc(payee, dotOrMc) {
   const target = normalize(dotOrMc);
-  if (!target) return false;
-
   const candidates = [
     payee?.dot_number,
     payee?.mc_number
@@ -56,6 +44,46 @@ function payeeMatchesDotOrMc(payee, dotOrMc) {
   return candidates.includes(target);
 }
 
+// 1) See which brokers this API key is actually linked to
+app.get("/api/brokers", async (req, res) => {
+  try {
+    const brokers = await roadsyncGet("/brokers", false);
+    return res.json({
+      configuredBrokerId: BROKER_ID,
+      brokers
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: "brokers_lookup_failed",
+      details: err.message
+    });
+  }
+});
+
+// 2) Test current broker-id against payees + loads
+app.get("/api/health", async (req, res) => {
+  try {
+    const [payees, loads] = await Promise.all([
+      roadsyncGet("/payees", true),
+      roadsyncGet("/loads", true)
+    ]);
+
+    return res.json({
+      ok: true,
+      configuredBrokerId: BROKER_ID,
+      payeesCount: Array.isArray(payees) ? payees.length : null,
+      loadsCount: Array.isArray(loads) ? loads.length : null
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      configuredBrokerId: BROKER_ID,
+      error: err.message
+    });
+  }
+});
+
+// 3) Search using loads first
 app.get("/api/search", async (req, res) => {
   try {
     const { load, dot } = req.query;
@@ -64,61 +92,18 @@ app.get("/api/search", async (req, res) => {
       return res.status(400).json({ error: "load_and_dot_required" });
     }
 
-    const [payeesRaw, payablesRaw, loadsRaw] = await Promise.all([
-      roadsyncGet("/payees"),
-      roadsyncGet("/payables"),
-      roadsyncGet("/loads")
+    const [payeesRaw, loadsRaw] = await Promise.all([
+      roadsyncGet("/payees", true),
+      roadsyncGet("/loads", true)
     ]);
 
     const payees = Array.isArray(payeesRaw) ? payeesRaw : [];
-    const payables = Array.isArray(payablesRaw) ? payablesRaw : [];
     const loads = Array.isArray(loadsRaw) ? loadsRaw : [];
-
     const payeesById = new Map(payees.map(p => [String(p.id), p]));
+
     const targetLoad = normalize(load);
+    const matches = [];
 
-    // Search payables first
-    for (const payable of payables) {
-      const payableCandidates = [
-        payable?.id,
-        payable?.invoice_number,
-        payable?.po_number,
-        payable?.idempotency_key
-      ].map(normalize);
-
-      if (!payableCandidates.includes(targetLoad)) continue;
-
-      const carrier =
-        (payable?.carrier_payee?.id != null && payeesById.get(String(payable.carrier_payee.id))) ||
-        (payable?.payee?.id != null && payeesById.get(String(payable.payee.id))) ||
-        null;
-
-      if (!carrier || !payeeMatchesDotOrMc(carrier, dot)) continue;
-
-      return res.json({
-        carrier: {
-          name: carrier.payee_name || "",
-          dot: carrier.dot_number || "",
-          mc: carrier.mc_number || "",
-          verified: carrier.is_verified ?? "",
-          isFactoringCompany: carrier.is_factoring_company ?? false,
-          payment_types: carrier.available_payment_types || []
-        },
-        payments: [{
-          source: "payables",
-          payableId: payable.id || "",
-          status: payable.status || "",
-          amount: payable.amount || "",
-          method: payable.payment_method || "",
-          eta: payable.eta || "",
-          invoiceNumber: payable.invoice_number || "",
-          poNumber: payable.po_number || "",
-          scheduledForDate: payable.scheduled_for_date || ""
-        }]
-      });
-    }
-
-    // Search loads second
     for (const loadObj of loads) {
       const loadCandidates = [
         loadObj?.id,
@@ -135,9 +120,10 @@ app.get("/api/search", async (req, res) => {
         loadObj?.payee ||
         null;
 
-      if (!carrier || !payeeMatchesDotOrMc(carrier, dot)) continue;
+      if (!carrier) continue;
+      if (!payeeMatchesDotOrMc(carrier, dot)) continue;
 
-      return res.json({
+      matches.push({
         carrier: {
           name: carrier.payee_name || "",
           dot: carrier.dot_number || "",
@@ -146,47 +132,39 @@ app.get("/api/search", async (req, res) => {
           isFactoringCompany: carrier.is_factoring_company ?? false,
           payment_types: carrier.available_payment_types || []
         },
-        payments: [{
-          source: "loads",
+        payment: {
           loadId: loadObj.id || "",
           loadNumber: loadObj.load_number || "",
           externalId: loadObj.external_id || "",
-          status: loadObj?.payable?.status || loadObj.status || "",
-          amount: loadObj?.payable?.amount || loadObj.amount || "",
-          method: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
+          amount: loadObj.amount || "",
+          loadStatus: loadObj.status || "",
+          payableId: loadObj?.payable?.id || "",
+          payableStatus: loadObj?.payable?.status || "",
+          paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
           transactionId: loadObj?.payable?.transaction?.id || "",
           transactionStatus: loadObj?.payable?.transaction?.status || ""
-        }]
+        }
+      });
+    }
+
+    if (matches.length === 0) {
+      return res.json({
+        carrier: null,
+        payments: [],
+        debug: {
+          message: "No matching load found for that DOT/MC and load value under the configured broker-id."
+        }
       });
     }
 
     return res.json({
-      carrier: null,
-      payments: [],
-      debug: {
-        message: "No match found."
-      }
+      carrier: matches[0].carrier,
+      payments: matches.map(m => m.payment)
     });
   } catch (err) {
-    console.error(err);
     return res.status(500).json({
       error: "lookup_failed",
       details: err.message
-    });
-  }
-});
-
-app.get("/api/health", async (req, res) => {
-  try {
-    const payees = await roadsyncGet("/payees");
-    res.json({
-      ok: true,
-      payees_count: Array.isArray(payees) ? payees.length : null
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message
     });
   }
 });
