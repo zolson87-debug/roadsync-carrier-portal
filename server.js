@@ -8,10 +8,27 @@ app.use(express.json());
 
 const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
-const BASE_URL = "https://api.roadsync.app/rspay/v1";
+const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
+
+// Example:
+// /transactions?reference_id={{reference_id}}
+const TRANSACTION_SEARCH_TEMPLATE =
+  process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
+  "/transactions?reference_id={{reference_id}}";
+
+if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
+if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
+if (!/^\d+$/.test(String(BROKER_ID))) throw new Error("ROADSYNC_BROKER_ID must be numeric");
 
 function normalize(value) {
   return String(value ?? "").trim().toUpperCase();
+}
+
+function buildTransactionSearchPath(referenceId) {
+  return TRANSACTION_SEARCH_TEMPLATE.replace(
+    "{{reference_id}}",
+    encodeURIComponent(referenceId)
+  );
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -20,8 +37,8 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
     "Content-Type": "application/json"
   };
 
-  if (includeBrokerId && BROKER_ID) {
-    headers["broker-id"] = BROKER_ID;
+  if (includeBrokerId) {
+    headers["broker-id"] = String(BROKER_ID);
   }
 
   const res = await fetch(`${BASE_URL}${endpoint}`, { headers });
@@ -34,8 +51,16 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
   return res.json();
 }
 
-function payeeMatchesDotOrMc(payee, dotOrMc) {
-  const target = normalize(dotOrMc);
+function toArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
+
+function dotOrMcMatches(payee, userValue) {
+  const target = normalize(userValue);
   const candidates = [
     payee?.dot_number,
     payee?.mc_number
@@ -44,126 +69,98 @@ function payeeMatchesDotOrMc(payee, dotOrMc) {
   return candidates.includes(target);
 }
 
-// 1) See which brokers this API key is actually linked to
-app.get("/api/brokers", async (req, res) => {
-  try {
-    const brokers = await roadsyncGet("/brokers", false);
-    return res.json({
-      configuredBrokerId: BROKER_ID,
-      brokers
-    });
-  } catch (err) {
-    return res.status(500).json({
-      error: "brokers_lookup_failed",
-      details: err.message
-    });
-  }
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    configuredBrokerId: String(BROKER_ID),
+    transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE
+  });
 });
 
-// 2) Test current broker-id against payees + loads
-app.get("/api/health", async (req, res) => {
-  try {
-    const [payees, loads] = await Promise.all([
-      roadsyncGet("/payees", true),
-      roadsyncGet("/loads", true)
-    ]);
-
-    return res.json({
-      ok: true,
-      configuredBrokerId: BROKER_ID,
-      payeesCount: Array.isArray(payees) ? payees.length : null,
-      loadsCount: Array.isArray(loads) ? loads.length : null
-    });
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      configuredBrokerId: BROKER_ID,
-      error: err.message
-    });
-  }
-});
-
-// 3) Search using loads first
 app.get("/api/search", async (req, res) => {
   try {
-    const { load, dot } = req.query;
+    const { dot, reference } = req.query;
 
-    if (!load || !dot) {
-      return res.status(400).json({ error: "load_and_dot_required" });
-    }
-
-    const [payeesRaw, loadsRaw] = await Promise.all([
-      roadsyncGet("/payees", true),
-      roadsyncGet("/loads", true)
-    ]);
-
-    const payees = Array.isArray(payeesRaw) ? payeesRaw : [];
-    const loads = Array.isArray(loadsRaw) ? loadsRaw : [];
-    const payeesById = new Map(payees.map(p => [String(p.id), p]));
-
-    const targetLoad = normalize(load);
-    const matches = [];
-
-    for (const loadObj of loads) {
-      const loadCandidates = [
-        loadObj?.id,
-        loadObj?.load_number,
-        loadObj?.external_id
-      ].map(normalize);
-
-      if (!loadCandidates.includes(targetLoad)) continue;
-
-      const carrier =
-        (loadObj?.carrier_payee?.id != null && payeesById.get(String(loadObj.carrier_payee.id))) ||
-        (loadObj?.payee?.id != null && payeesById.get(String(loadObj.payee.id))) ||
-        loadObj?.carrier_payee ||
-        loadObj?.payee ||
-        null;
-
-      if (!carrier) continue;
-      if (!payeeMatchesDotOrMc(carrier, dot)) continue;
-
-      matches.push({
-        carrier: {
-          name: carrier.payee_name || "",
-          dot: carrier.dot_number || "",
-          mc: carrier.mc_number || "",
-          verified: carrier.is_verified ?? "",
-          isFactoringCompany: carrier.is_factoring_company ?? false,
-          payment_types: carrier.available_payment_types || []
-        },
-        payment: {
-          loadId: loadObj.id || "",
-          loadNumber: loadObj.load_number || "",
-          externalId: loadObj.external_id || "",
-          amount: loadObj.amount || "",
-          loadStatus: loadObj.status || "",
-          payableId: loadObj?.payable?.id || "",
-          payableStatus: loadObj?.payable?.status || "",
-          paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
-          transactionId: loadObj?.payable?.transaction?.id || "",
-          transactionStatus: loadObj?.payable?.transaction?.status || ""
-        }
+    if (!dot || !reference) {
+      return res.status(400).json({
+        error: "dot_and_reference_required"
       });
     }
 
-    if (matches.length === 0) {
+    // 1. Find transaction(s) by exact reference_id
+    const transactionPath = buildTransactionSearchPath(reference);
+    const transactionsRaw = await roadsyncGet(transactionPath, true);
+    const transactions = toArray(transactionsRaw);
+
+    if (transactions.length === 0) {
       return res.json({
         carrier: null,
         payments: [],
         debug: {
-          message: "No matching load found for that DOT/MC and load value under the configured broker-id."
+          message: "No transaction found for that reference ID."
         }
       });
     }
 
+    // 2. Check each returned transaction against payee DOT/MC
+    for (const tx of transactions) {
+      if (!tx?.payee_id) continue;
+
+      const payee = await roadsyncGet(`/payees/${tx.payee_id}`, true);
+
+      if (!dotOrMcMatches(payee, dot)) {
+        continue;
+      }
+
+      const payables = Array.isArray(tx.payables) ? tx.payables : [];
+
+      return res.json({
+        carrier: {
+          name: payee.payee_name || tx?.payee?.payee_name || "",
+          dot: payee.dot_number || "",
+          mc: payee.mc_number || "",
+          verified: payee.is_verified ?? tx?.payee?.is_verified ?? "",
+          isFactoringCompany: payee.is_factoring_company ?? tx?.payee?.is_factoring_company ?? false,
+          payment_types: payee.available_payment_types || []
+        },
+        payments: [
+          {
+            transactionId: tx.id || "",
+            referenceId: tx.reference_id || "",
+            externalId: tx.external_id || "",
+            transactionStatus: tx.status || "",
+            amount: tx.amount || "",
+            paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || "",
+            eta: tx.eta || "",
+            createdDatetime: tx.created_datetime || "",
+            updatedDatetime: tx.updated_datetime || "",
+            payables: payables.map(p => ({
+              payableId: p.id || "",
+              payableStatus: p.status || "",
+              invoiceNumber: p.invoice_number || "",
+              poNumber: p.po_number || "",
+              loadId: p.load_id || "",
+              loadNumber: p?.load?.load_number || "",
+              loadExternalId: p?.load?.external_id || "",
+              scheduledForDate: p.scheduled_for_date || "",
+              amount: p.amount || ""
+            }))
+          }
+        ]
+      });
+    }
+
     return res.json({
-      carrier: matches[0].carrier,
-      payments: matches.map(m => m.payment)
+      carrier: null,
+      payments: [],
+      debug: {
+        message: "Reference ID matched a transaction, but DOT/MC did not match the linked payee."
+      }
     });
   } catch (err) {
+    console.error(err);
     return res.status(500).json({
-      error: "lookup_failed",
+      error: "search_failed",
       details: err.message
     });
   }
