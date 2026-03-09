@@ -214,10 +214,6 @@
       margin-top:8px;
       line-height:1.5;
     }
-
-    .muted{
-      color:var(--muted);
-    }
   </style>
 </head>
 <body>
@@ -482,6 +478,10 @@
           <div class="kv">
             <div class="k">Updated</div>
             <div class="v">${esc(payment.updatedDatetime)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Matched Payee Source</div>
+            <div class="v">${esc(payment.matchedPayeeSource || "")}</div>
           </div>
 
           ${
