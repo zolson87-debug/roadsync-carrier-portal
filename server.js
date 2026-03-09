@@ -31,26 +31,25 @@ async function roadsyncGet(endpoint) {
   return res.json();
 }
 
-function payableMatchesLoad(payable, load) {
-  const target = normalize(load);
-
-  const candidates = [
-    payable.invoice_number,
-    payable.po_number,
-    payable.reference_id,
-    payable.load_id,
-    payable.external_id
-  ];
-
-  return candidates.some(v => normalize(v) === target);
-}
-
 function payeeMatchesDotOrMc(payee, dotOrMc) {
   const target = normalize(dotOrMc).toUpperCase();
 
   const candidates = [
-    payee.dot_number,
-    payee.mc_number
+    payee?.dot_number,
+    payee?.mc_number
+  ].map(v => normalize(v).toUpperCase());
+
+  return candidates.includes(target);
+}
+
+function payableMatchesLoad(payable, load) {
+  const target = normalize(load).toUpperCase();
+
+  const candidates = [
+    payable?.invoice_number,
+    payable?.po_number,
+    payable?.id,                 // sometimes the visible "payment id" is actually the payable id
+    payable?.idempotency_key
   ].map(v => normalize(v).toUpperCase());
 
   return candidates.includes(target);
@@ -64,113 +63,101 @@ app.get("/api/search", async (req, res) => {
       return res.status(400).json({ error: "load_and_dot_required" });
     }
 
-    const [transactions, payees] = await Promise.all([
-      roadsyncGet("/transactions"),
+    const [payables, payees] = await Promise.all([
+      roadsyncGet("/payables"),
       roadsyncGet("/payees")
     ]);
 
-    const payeesById = new Map(payees.map(p => [String(p.id), p]));
-    const matchingResults = [];
+    const payeesById = new Map(
+      (Array.isArray(payees) ? payees : []).map(p => [String(p.id), p])
+    );
 
-    for (const tx of transactions) {
-      const payables = Array.isArray(tx.payables) ? tx.payables : [];
+    const matches = [];
 
-      for (const payable of payables) {
-        if (!payableMatchesLoad(payable, load)) continue;
+    for (const payable of Array.isArray(payables) ? payables : []) {
+      if (!payableMatchesLoad(payable, load)) continue;
 
-        // In RoadSync, the carrier may be nested under payable.carrier_payee,
-        // while tx.payee may be a factoring company.
-        const carrierPayeeId =
-          payable?.carrier_payee?.id ??
-          tx?.carrier_payee_id ??
-          tx?.payee?.id;
+      // Prefer the actual carrier
+      const carrierPayeeId = payable?.carrier_payee?.id;
+      const carrier = carrierPayeeId != null ? payeesById.get(String(carrierPayeeId)) : null;
 
-        const carrier =
-          carrierPayeeId != null ? payeesById.get(String(carrierPayeeId)) : null;
+      if (carrier && payeeMatchesDotOrMc(carrier, dot)) {
+        matches.push({
+          carrier: {
+            id: carrier.id,
+            name: carrier.payee_name,
+            dot: carrier.dot_number || "",
+            mc: carrier.mc_number || "",
+            verified: carrier.is_verified,
+            isFactoringCompany: carrier.is_factoring_company,
+            paymentTypes: carrier.available_payment_types || []
+          },
+          payment: {
+            payableId: payable.id,
+            status: payable.status,
+            amount: payable.amount,
+            method: payable.payment_method,
+            eta: payable.eta || null,
+            invoiceNumber: payable.invoice_number || "",
+            poNumber: payable.po_number || "",
+            scheduledForDate: payable.scheduled_for_date || ""
+          }
+        });
+        continue;
+      }
 
-        // Try match against actual carrier payee first.
-        if (carrier && payeeMatchesDotOrMc(carrier, dot)) {
-          matchingResults.push({
-            carrier: {
-              id: carrier.id,
-              name: carrier.payee_name,
-              dot: carrier.dot_number || "",
-              mc: carrier.mc_number || "",
-              verified: carrier.is_verified,
-              isFactoringCompany: carrier.is_factoring_company,
-              paymentTypes: carrier.available_payment_types || []
-            },
-            payment: {
-              transactionId: tx.id,
-              status: tx.status,
-              amount: tx.amount,
-              method: tx.payment_method,
-              eta: tx.eta || null,
-              invoiceNumber: payable.invoice_number || "",
-              poNumber: payable.po_number || "",
-              scheduledForDate: payable.scheduled_for_date || "",
-              checkPreviewUrl: tx?.check_preview?.url || ""
-            }
-          });
-          continue;
-        }
+      // Fallback to payable.payee in case payment is directly against factor/payee
+      const payeeId = payable?.payee?.id;
+      const payee = payeeId != null ? payeesById.get(String(payeeId)) : null;
 
-        // Fallback: sometimes a user may paste an MC instead of DOT,
-        // or the broker may be paying a factor directly.
-        const txPayeeId = tx?.payee?.id;
-        const txPayee = txPayeeId != null ? payeesById.get(String(txPayeeId)) : null;
-
-        if (txPayee && payeeMatchesDotOrMc(txPayee, dot)) {
-          matchingResults.push({
-            carrier: {
-              id: txPayee.id,
-              name: txPayee.payee_name,
-              dot: txPayee.dot_number || "",
-              mc: txPayee.mc_number || "",
-              verified: txPayee.is_verified,
-              isFactoringCompany: txPayee.is_factoring_company,
-              paymentTypes: txPayee.available_payment_types || []
-            },
-            payment: {
-              transactionId: tx.id,
-              status: tx.status,
-              amount: tx.amount,
-              method: tx.payment_method,
-              eta: tx.eta || null,
-              invoiceNumber: payable.invoice_number || "",
-              poNumber: payable.po_number || "",
-              scheduledForDate: payable.scheduled_for_date || "",
-              checkPreviewUrl: tx?.check_preview?.url || ""
-            }
-          });
-        }
+      if (payee && payeeMatchesDotOrMc(payee, dot)) {
+        matches.push({
+          carrier: {
+            id: payee.id,
+            name: payee.payee_name,
+            dot: payee.dot_number || "",
+            mc: payee.mc_number || "",
+            verified: payee.is_verified,
+            isFactoringCompany: payee.is_factoring_company,
+            paymentTypes: payee.available_payment_types || []
+          },
+          payment: {
+            payableId: payable.id,
+            status: payable.status,
+            amount: payable.amount,
+            method: payable.payment_method,
+            eta: payable.eta || null,
+            invoiceNumber: payable.invoice_number || "",
+            poNumber: payable.po_number || "",
+            scheduledForDate: payable.scheduled_for_date || ""
+          }
+        });
       }
     }
 
-    if (matchingResults.length === 0) {
+    if (matches.length === 0) {
       return res.json({
         carrier: null,
         payments: [],
         debug: {
-          message: "No match found for that DOT/MC and load number combination."
+          message: "No payable matched that DOT/MC + load value."
         }
       });
     }
 
-    // Return first carrier + all matched payments for that same carrier
-    const firstCarrierId = matchingResults[0].carrier.id;
-    const payments = matchingResults
-      .filter(r => r.carrier.id === firstCarrierId)
-      .map(r => r.payment);
+    const firstCarrierId = matches[0].carrier.id;
+    const payments = matches
+      .filter(m => m.carrier.id === firstCarrierId)
+      .map(m => m.payment);
 
     return res.json({
       carrier: {
-        name: matchingResults[0].carrier.name,
-        dot: matchingResults[0].carrier.dot,
-        mc: matchingResults[0].carrier.mc,
-        verified: matchingResults[0].carrier.verified,
-        isFactoringCompany: matchingResults[0].carrier.isFactoringCompany,
-        payment_types: matchingResults[0].carrier.paymentTypes
+        name: matches[0].carrier.name,
+        dot: matches[0].carrier.dot,
+        mc: matches[0].carrier.mc,
+        verified: matches[0].carrier.verified,
+        isFactoringCompany: matches[0].carrier.isFactoringCompany,
+        payment_types: matches[0].carrier.paymentTypes
       },
       payments
     });
