@@ -8,7 +8,7 @@ app.use(express.json());
 
 const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
-const BASE_URL = "https://api.roadsync.com/rspay";
+const BASE_URL = "https://api.roadsync.app/rspay/v1";
 
 function normalize(value) {
   return String(value ?? "").trim().toUpperCase();
@@ -77,7 +77,7 @@ app.get("/api/search", async (req, res) => {
     const payeesById = new Map(payees.map(p => [String(p.id), p]));
     const targetLoad = normalize(load);
 
-    // 1) Search payables
+    // Search payables first
     for (const payable of payables) {
       const payableCandidates = [
         payable?.id,
@@ -118,7 +118,7 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // 2) Search loads
+    // Search loads second
     for (const loadObj of loads) {
       const loadCandidates = [
         loadObj?.id,
@@ -164,7 +164,7 @@ app.get("/api/search", async (req, res) => {
       carrier: null,
       payments: [],
       debug: {
-        message: "No match found in payables.id/invoice/po/idempotency_key or loads.id/load_number/external_id for that DOT/MC."
+        message: "No match found."
       }
     });
   } catch (err) {
@@ -176,108 +176,17 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-// TEMPORARY DEBUG ROUTE
-app.get("/api/debug-search", async (req, res) => {
+app.get("/api/health", async (req, res) => {
   try {
-    const { load, dot } = req.query;
-
-    const [payeesRaw, payablesRaw, loadsRaw] = await Promise.all([
-      roadsyncGet("/payees"),
-      roadsyncGet("/payables"),
-      roadsyncGet("/loads")
-    ]);
-
-    const payees = Array.isArray(payeesRaw) ? payeesRaw : [];
-    const payables = Array.isArray(payablesRaw) ? payablesRaw : [];
-    const loads = Array.isArray(loadsRaw) ? loadsRaw : [];
-
-    const payeesById = new Map(payees.map(p => [String(p.id), p]));
-    const targetLoad = normalize(load);
-    const targetDot = normalize(dot);
-
-    const payableMatches = payables
-      .map(p => {
-        const carrier =
-          (p?.carrier_payee?.id != null && payeesById.get(String(p.carrier_payee.id))) ||
-          (p?.payee?.id != null && payeesById.get(String(p.payee.id))) ||
-          null;
-
-        return {
-          matchedFields: {
-            id: normalize(p?.id) === targetLoad,
-            invoice_number: normalize(p?.invoice_number) === targetLoad,
-            po_number: normalize(p?.po_number) === targetLoad,
-            idempotency_key: normalize(p?.idempotency_key) === targetLoad
-          },
-          payable: {
-            id: p?.id ?? null,
-            invoice_number: p?.invoice_number ?? "",
-            po_number: p?.po_number ?? "",
-            idempotency_key: p?.idempotency_key ?? "",
-            status: p?.status ?? "",
-            amount: p?.amount ?? "",
-            payment_method: p?.payment_method ?? ""
-          },
-          carrier: getPayeeSummary(carrier),
-          dotMatched: carrier ? payeeMatchesDotOrMc(carrier, targetDot) : false
-        };
-      })
-      .filter(x =>
-        x.matchedFields.id ||
-        x.matchedFields.invoice_number ||
-        x.matchedFields.po_number ||
-        x.matchedFields.idempotency_key
-      )
-      .slice(0, 20);
-
-    const loadMatches = loads
-      .map(l => {
-        const carrier =
-          (l?.carrier_payee?.id != null && payeesById.get(String(l.carrier_payee.id))) ||
-          (l?.payee?.id != null && payeesById.get(String(l.payee.id))) ||
-          l?.carrier_payee ||
-          l?.payee ||
-          null;
-
-        return {
-          matchedFields: {
-            id: normalize(l?.id) === targetLoad,
-            load_number: normalize(l?.load_number) === targetLoad,
-            external_id: normalize(l?.external_id) === targetLoad
-          },
-          load: {
-            id: l?.id ?? null,
-            load_number: l?.load_number ?? "",
-            external_id: l?.external_id ?? "",
-            status: l?.status ?? "",
-            amount: l?.amount ?? ""
-          },
-          carrier: getPayeeSummary(carrier),
-          dotMatched: carrier ? payeeMatchesDotOrMc(carrier, targetDot) : false
-        };
-      })
-      .filter(x =>
-        x.matchedFields.id ||
-        x.matchedFields.load_number ||
-        x.matchedFields.external_id
-      )
-      .slice(0, 20);
-
-    return res.json({
-      input: { load, dot },
-      summary: {
-        payeesCount: payees.length,
-        payablesCount: payables.length,
-        loadsCount: loads.length
-      },
-      payableMatches,
-      loadMatches
+    const payees = await roadsyncGet("/payees");
+    res.json({
+      ok: true,
+      payees_count: Array.isArray(payees) ? payees.length : null
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      error: "debug_lookup_failed",
-      details: err.message
+    res.status(500).json({
+      ok: false,
+      error: err.message
     });
   }
 });
