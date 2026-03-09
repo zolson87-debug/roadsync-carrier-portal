@@ -1,0 +1,76 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Carrier Payment Portal</title>
+<style>
+body { font-family: Arial; background:#f4f6f8; padding:40px; }
+.container { max-width:700px; margin:auto; background:white; padding:30px; border-radius:8px; }
+input { padding:10px; margin:5px; width:200px; }
+button { padding:10px 20px; }
+.result { margin-top:20px; }
+.card { background:#fafafa; padding:15px; margin-top:10px; border-radius:6px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+<h2>Carrier Payment Status</h2>
+<p>Enter your DOT Number and Load Number</p>
+
+<input id="dot" placeholder="DOT Number"/>
+<input id="load" placeholder="Load Number"/>
+<button onclick="lookup()">Check Payment</button>
+
+<div id="result" class="result"></div>
+</div>
+
+<script>
+async function lookup(){
+
+ const dot = document.getElementById("dot").value;
+ const load = document.getElementById("load").value;
+
+ const res = await fetch(`/api/carrier-lookup?dot=${dot}&load=${load}`);
+ const data = await res.json();
+
+ const el = document.getElementById("result");
+ el.innerHTML = "";
+
+ if(!data.carrier){
+   el.innerHTML = "<p>No carrier found.</p>";
+   return;
+ }
+
+ el.innerHTML += `
+   <div class="card">
+   <b>Carrier:</b> ${data.carrier.name}<br>
+   <b>DOT:</b> ${data.carrier.dot}<br>
+   <b>MC:</b> ${data.carrier.mc}<br>
+   <b>Verified:</b> ${data.carrier.verified}<br>
+   <b>Eligible Payment Types:</b> ${data.carrier.payment_methods.join(", ")}
+   </div>
+ `;
+
+ if(data.payments.length === 0){
+   el.innerHTML += "<p>No payment found for this load yet.</p>";
+   return;
+ }
+
+ data.payments.forEach(p=>{
+   el.innerHTML += `
+     <div class="card">
+     <b>Status:</b> ${p.status}<br>
+     <b>Amount:</b> $${p.amount}<br>
+     <b>Method:</b> ${p.payment_method}<br>
+     <b>ETA:</b> ${p.eta || "Pending"}<br>
+     <b>Transaction ID:</b> ${p.id}
+     </div>
+   `
+ });
+}
+</script>
+
+</body>
+</html>
