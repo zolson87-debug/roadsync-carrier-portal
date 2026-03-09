@@ -93,7 +93,10 @@ async function loadCandidatePayees(tx) {
       }
     }
 
-    if (p?.carrier_payee && !seen.has(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`)) {
+    if (
+      p?.carrier_payee &&
+      !seen.has(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`)
+    ) {
       seen.add(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`);
       candidates.push({
         source: "payables[].carrier_payee_inline",
@@ -103,10 +106,12 @@ async function loadCandidatePayees(tx) {
     }
   }
 
-  if (tx?.payee_id && !seen.has(`id:${tx.payee_id}`)) {
-    seen.add(`id:${tx.payee_id}`);
+  const topLevelPayeeId = tx?.payee_id || tx?.payee?.id;
+
+  if (topLevelPayeeId && !seen.has(`id:${topLevelPayeeId}`)) {
+    seen.add(`id:${topLevelPayeeId}`);
     try {
-      const fullPayee = await roadsyncGet(`/payees/${tx.payee_id}`, true);
+      const fullPayee = await roadsyncGet(`/payees/${topLevelPayeeId}`, true);
       candidates.push({
         source: "transaction.payee_id",
         payee: fullPayee,
@@ -115,7 +120,7 @@ async function loadCandidatePayees(tx) {
     } catch (e) {
       candidates.push({
         source: "transaction.payee_id_lookup_failed",
-        payee: { id: tx.payee_id },
+        payee: { id: topLevelPayeeId },
         lookupError: e.message
       });
     }
@@ -176,7 +181,7 @@ app.get("/api/search", async (req, res) => {
             message: "Reference ID matched a transaction, but DOT/MC did not match any related payee record.",
             transactionId: tx.id,
             referenceId: tx.reference_id || "",
-            payeeId: tx.payee_id || "",
+            payeeId: tx.payee_id || tx?.payee?.id || "",
             checkedPayeeSources: candidatePayees.map(c => ({
               source: c.source,
               payeeId: c.payee?.id || "",
