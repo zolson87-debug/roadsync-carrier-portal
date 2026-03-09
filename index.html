@@ -126,6 +126,11 @@
       background:var(--brand-dark);
     }
 
+    button:disabled{
+      opacity:.7;
+      cursor:default;
+    }
+
     .section-title{
       font-size:14px;
       font-weight:700;
@@ -292,6 +297,22 @@
       }
 
       return "warn";
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+
+      return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: "America/Chicago",
+        timeZoneName: "short"
+      }).format(d);
     }
 
     function clearResults() {
@@ -469,15 +490,15 @@
           </div>
           <div class="kv">
             <div class="k">ETA</div>
-            <div class="v">${esc(payment.eta)}</div>
+            <div class="v">${esc(formatDateTime(payment.eta))}</div>
           </div>
           <div class="kv">
             <div class="k">Created</div>
-            <div class="v">${esc(payment.createdDatetime)}</div>
+            <div class="v">${esc(formatDateTime(payment.createdDatetime))}</div>
           </div>
           <div class="kv">
             <div class="k">Updated</div>
-            <div class="v">${esc(payment.updatedDatetime)}</div>
+            <div class="v">${esc(formatDateTime(payment.updatedDatetime))}</div>
           </div>
           <div class="kv">
             <div class="k">Matched Payee Source</div>
@@ -531,7 +552,7 @@
           </div>
           <div class="kv">
             <div class="k">Scheduled For Date</div>
-            <div class="v">${esc(payable.scheduledForDate)}</div>
+            <div class="v">${esc(formatDateTime(payable.scheduledForDate))}</div>
           </div>
           <div class="kv">
             <div class="k">Amount</div>
