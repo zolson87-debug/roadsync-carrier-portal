@@ -1,75 +1,167 @@
-
 <!DOCTYPE html>
 <html>
+
 <head>
+
 <meta charset="UTF-8">
+
 <title>Carrier Payment Portal</title>
+
 <style>
-body { font-family: Arial; background:#f4f6f8; padding:40px; }
-.container { max-width:700px; margin:auto; background:white; padding:30px; border-radius:8px; }
-input { padding:10px; margin:5px; width:200px; }
-button { padding:10px 20px; }
-.result { margin-top:20px; }
-.card { background:#fafafa; padding:15px; margin-top:10px; border-radius:6px; }
+
+body{
+font-family:Arial;
+background:#f5f6f8;
+margin:0;
+}
+
+.header{
+background:#111827;
+color:white;
+padding:20px;
+font-size:20px;
+}
+
+.container{
+max-width:900px;
+margin:auto;
+padding:30px;
+}
+
+.card{
+background:white;
+padding:20px;
+border-radius:8px;
+margin-bottom:20px;
+box-shadow:0 2px 8px rgba(0,0,0,0.1);
+}
+
+input{
+padding:12px;
+border:1px solid #ccc;
+border-radius:6px;
+width:200px;
+margin-right:10px;
+}
+
+button{
+padding:12px 20px;
+background:#2563eb;
+color:white;
+border:none;
+border-radius:6px;
+cursor:pointer;
+}
+
+.status{
+font-weight:bold;
+}
+
+.paid{
+color:green;
+}
+
+.pending{
+color:orange;
+}
+
+.failed{
+color:red;
+}
+
 </style>
+
 </head>
+
 <body>
 
+<div class="header">
+Carrier Payment Portal
+</div>
+
 <div class="container">
-<h2>Carrier Payment Status</h2>
-<p>Enter your DOT Number and Load Number</p>
 
-<input id="dot" placeholder="DOT Number"/>
-<input id="load" placeholder="Load Number"/>
-<button onclick="lookup()">Check Payment</button>
+<div class="card">
 
-<div id="result" class="result"></div>
+<h3>Check Payment Status</h3>
+
+<input id="dot" placeholder="DOT Number">
+<input id="load" placeholder="Load / Invoice Number">
+
+<button onclick="lookup()">Search</button>
+
+</div>
+
+<div id="carrier"></div>
+
+<div id="payments"></div>
+
 </div>
 
 <script>
+
 async function lookup(){
 
- const dot = document.getElementById("dot").value;
- const load = document.getElementById("load").value;
+const dot = document.getElementById("dot").value;
+const load = document.getElementById("load").value;
 
- const res = await fetch(`/api/carrier-lookup?dot=${dot}&load=${load}`);
- const data = await res.json();
+const res = await fetch(`/api/search?dot=${dot}&load=${load}`);
 
- const el = document.getElementById("result");
- el.innerHTML = "";
+const data = await res.json();
 
- if(!data.carrier){
-   el.innerHTML = "<p>No carrier found.</p>";
-   return;
- }
+const carrierDiv = document.getElementById("carrier");
+const paymentDiv = document.getElementById("payments");
 
- el.innerHTML += `
-   <div class="card">
-   <b>Carrier:</b> ${data.carrier.name}<br>
-   <b>DOT:</b> ${data.carrier.dot}<br>
-   <b>MC:</b> ${data.carrier.mc}<br>
-   <b>Verified:</b> ${data.carrier.verified}<br>
-   <b>Eligible Payment Types:</b> ${data.carrier.payment_methods.join(", ")}
-   </div>
- `;
+carrierDiv.innerHTML="";
+paymentDiv.innerHTML="";
 
- if(data.payments.length === 0){
-   el.innerHTML += "<p>No payment found for this load yet.</p>";
-   return;
- }
+if(!data.carrier){
 
- data.payments.forEach(p=>{
-   el.innerHTML += `
-     <div class="card">
-     <b>Status:</b> ${p.status}<br>
-     <b>Amount:</b> $${p.amount}<br>
-     <b>Method:</b> ${p.payment_method}<br>
-     <b>ETA:</b> ${p.eta || "Pending"}<br>
-     <b>Transaction ID:</b> ${p.id}
-     </div>
-   `
- });
+paymentDiv.innerHTML="<div class='card'>No payment found.</div>";
+
+return;
+
 }
+
+carrierDiv.innerHTML = `
+<div class="card">
+
+<h3>${data.carrier.name}</h3>
+
+DOT: ${data.carrier.dot}<br>
+MC: ${data.carrier.mc}<br>
+Verified: ${data.carrier.verified}<br>
+Eligible Payment Methods: ${data.carrier.payment_types.join(", ")}
+
+</div>
+`;
+
+data.payments.forEach(p=>{
+
+let cls="pending";
+
+if(p.status==="paid") cls="paid";
+if(p.status==="failed") cls="failed";
+
+paymentDiv.innerHTML += `
+
+<div class="card">
+
+<div class="status ${cls}">Status: ${p.status}</div>
+
+Amount: $${p.amount}<br>
+Payment Method: ${p.method}<br>
+ETA: ${p.eta || "Processing"}<br>
+Transaction ID: ${p.id}
+
+</div>
+
+`;
+
+});
+
+}
+
 </script>
 
 </body>
