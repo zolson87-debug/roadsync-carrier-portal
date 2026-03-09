@@ -68,6 +68,21 @@ function dotOrMcMatches(payee, userValue) {
   return candidates.includes(target);
 }
 
+function transactionMatchesReference(tx, reference) {
+  const target = normalizeIdLike(reference);
+
+  if (normalizeIdLike(tx?.reference_id) === target) {
+    return true;
+  }
+
+  for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
+    if (normalizeIdLike(p?.invoice_number) === target) return true;
+    if (normalizeIdLike(p?.load?.load_number) === target) return true;
+  }
+
+  return false;
+}
+
 async function loadCandidatePayees(tx) {
   const candidates = [];
   const seen = new Set();
@@ -162,7 +177,28 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    for (const tx of transactions) {
+    const exactReferenceMatches = transactions.filter(tx =>
+      transactionMatchesReference(tx, reference)
+    );
+
+    if (exactReferenceMatches.length === 0) {
+      return res.json({
+        carrier: null,
+        payments: [],
+        debug: {
+          message: "Transactions were returned by RoadSync, but none matched the reference exactly.",
+          searchedReference: reference,
+          returnedTransactions: transactions.map(tx => ({
+            transactionId: tx.id || "",
+            referenceId: tx.reference_id || "",
+            invoiceNumbers: (Array.isArray(tx.payables) ? tx.payables : []).map(p => p.invoice_number || ""),
+            loadNumbers: (Array.isArray(tx.payables) ? tx.payables : []).map(p => p?.load?.load_number || "")
+          }))
+        }
+      });
+    }
+
+    for (const tx of exactReferenceMatches) {
       const candidatePayees = await loadCandidatePayees(tx);
 
       let matchedCandidate = null;
@@ -178,7 +214,7 @@ app.get("/api/search", async (req, res) => {
           carrier: null,
           payments: [],
           debug: {
-            message: "Reference ID matched a transaction, but DOT/MC did not match any related payee record.",
+            message: "Reference matched exactly, but DOT/MC did not match any related payee record.",
             transactionId: tx.id,
             referenceId: tx.reference_id || reference || "",
             payeeId: tx.payee_id || tx?.payee?.id || "",
