@@ -74,15 +74,22 @@ async function loadCandidatePayees(tx) {
 
   for (const p of Array.isArray(tx.payables) ? tx.payables : []) {
     const cpId = p?.carrier_payee?.id;
+
     if (cpId && !seen.has(`id:${cpId}`)) {
       seen.add(`id:${cpId}`);
       try {
         const fullPayee = await roadsyncGet(`/payees/${cpId}`, true);
         candidates.push({
           source: "payables[].carrier_payee",
-          payee: fullPayee
+          payee: fullPayee,
+          lookupError: null
         });
       } catch (e) {
+        candidates.push({
+          source: "payables[].carrier_payee_lookup_failed",
+          payee: { id: cpId },
+          lookupError: e.message
+        });
       }
     }
 
@@ -90,7 +97,8 @@ async function loadCandidatePayees(tx) {
       seen.add(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`);
       candidates.push({
         source: "payables[].carrier_payee_inline",
-        payee: p.carrier_payee
+        payee: p.carrier_payee,
+        lookupError: null
       });
     }
   }
@@ -101,9 +109,15 @@ async function loadCandidatePayees(tx) {
       const fullPayee = await roadsyncGet(`/payees/${tx.payee_id}`, true);
       candidates.push({
         source: "transaction.payee_id",
-        payee: fullPayee
+        payee: fullPayee,
+        lookupError: null
       });
     } catch (e) {
+      candidates.push({
+        source: "transaction.payee_id_lookup_failed",
+        payee: { id: tx.payee_id },
+        lookupError: e.message
+      });
     }
   }
 
@@ -111,7 +125,8 @@ async function loadCandidatePayees(tx) {
     seen.add(`inline-payee:${tx.payee.id || tx.payee.payee_name}`);
     candidates.push({
       source: "transaction.payee_inline",
-      payee: tx.payee
+      payee: tx.payee,
+      lookupError: null
     });
   }
 
@@ -161,12 +176,14 @@ app.get("/api/search", async (req, res) => {
             message: "Reference ID matched a transaction, but DOT/MC did not match any related payee record.",
             transactionId: tx.id,
             referenceId: tx.reference_id || "",
+            payeeId: tx.payee_id || "",
             checkedPayeeSources: candidatePayees.map(c => ({
               source: c.source,
               payeeId: c.payee?.id || "",
               payeeName: c.payee?.payee_name || "",
               dot: c.payee?.dot_number || "",
-              mc: c.payee?.mc_number || ""
+              mc: c.payee?.mc_number || "",
+              lookupError: c.lookupError || null
             }))
           }
         });
