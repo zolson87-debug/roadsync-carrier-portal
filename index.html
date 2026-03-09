@@ -1,168 +1,553 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Carrier Payment Portal</title>
+  <style>
+    :root{
+      --bg:#f4f6f8;
+      --card:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --line:#e5e7eb;
+      --brand:#2563eb;
+      --brand-dark:#1d4ed8;
+      --ok:#15803d;
+      --warn:#b45309;
+      --bad:#b91c1c;
+    }
 
-<meta charset="UTF-8">
+    *{box-sizing:border-box}
 
-<title>Carrier Payment Portal</title>
+    body{
+      margin:0;
+      font-family:Arial, Helvetica, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
 
-<style>
+    .topbar{
+      background:#111827;
+      color:#fff;
+      padding:18px 24px;
+      font-size:20px;
+      font-weight:700;
+    }
 
-body{
-font-family:Arial;
-background:#f5f6f8;
-margin:0;
-}
+    .wrap{
+      max-width:980px;
+      margin:0 auto;
+      padding:24px;
+    }
 
-.header{
-background:#111827;
-color:white;
-padding:20px;
-font-size:20px;
-}
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:16px;
+      box-shadow:0 8px 24px rgba(17,24,39,.06);
+      padding:20px;
+      margin-bottom:18px;
+    }
 
-.container{
-max-width:900px;
-margin:auto;
-padding:30px;
-}
+    .hero{
+      display:flex;
+      justify-content:space-between;
+      gap:16px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
 
-.card{
-background:white;
-padding:20px;
-border-radius:8px;
-margin-bottom:20px;
-box-shadow:0 2px 8px rgba(0,0,0,0.1);
-}
+    .hero h1{
+      margin:0 0 6px 0;
+      font-size:28px;
+    }
 
-input{
-padding:12px;
-border:1px solid #ccc;
-border-radius:6px;
-width:200px;
-margin-right:10px;
-}
+    .sub{
+      color:var(--muted);
+      font-size:14px;
+      margin:0;
+      line-height:1.5;
+    }
 
-button{
-padding:12px 20px;
-background:#2563eb;
-color:white;
-border:none;
-border-radius:6px;
-cursor:pointer;
-}
+    .search-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr auto;
+      gap:12px;
+      margin-top:18px;
+    }
 
-.status{
-font-weight:bold;
-}
+    @media (max-width: 760px){
+      .search-grid{
+        grid-template-columns:1fr;
+      }
 
-.paid{
-color:green;
-}
+      .grid-2{
+        grid-template-columns:1fr !important;
+      }
 
-.pending{
-color:orange;
-}
+      .kv{
+        grid-template-columns:1fr !important;
+        gap:4px !important;
+      }
+    }
 
-.failed{
-color:red;
-}
+    label{
+      display:block;
+      font-size:13px;
+      color:var(--muted);
+      margin-bottom:6px;
+      font-weight:700;
+    }
 
-</style>
+    input{
+      width:100%;
+      padding:14px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      font-size:15px;
+      background:#fff;
+    }
 
+    button{
+      align-self:end;
+      height:48px;
+      border:none;
+      border-radius:12px;
+      background:var(--brand);
+      color:#fff;
+      padding:0 18px;
+      font-size:15px;
+      font-weight:700;
+      cursor:pointer;
+    }
+
+    button:hover{
+      background:var(--brand-dark);
+    }
+
+    .section-title{
+      font-size:14px;
+      font-weight:700;
+      color:var(--muted);
+      margin-bottom:12px;
+      text-transform:uppercase;
+      letter-spacing:.04em;
+    }
+
+    .grid-2{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:16px;
+    }
+
+    .kv{
+      display:grid;
+      grid-template-columns:180px 1fr;
+      gap:10px;
+      padding:8px 0;
+      border-bottom:1px solid var(--line);
+    }
+
+    .kv:last-child{
+      border-bottom:none;
+    }
+
+    .k{
+      color:var(--muted);
+      font-size:14px;
+    }
+
+    .v{
+      font-size:14px;
+      font-weight:700;
+      word-break:break-word;
+    }
+
+    .pill{
+      display:inline-block;
+      border-radius:999px;
+      background:#eff6ff;
+      color:#1d4ed8;
+      padding:6px 10px;
+      font-size:12px;
+      font-weight:700;
+      margin:4px 6px 0 0;
+    }
+
+    .payment-card{
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:16px;
+      margin-top:12px;
+      background:#fcfcfd;
+    }
+
+    .payment-status{
+      font-weight:700;
+      font-size:15px;
+      margin-bottom:10px;
+    }
+
+    .ok{color:var(--ok)}
+    .warn{color:var(--warn)}
+    .bad{color:var(--bad)}
+
+    .result-empty{
+      color:var(--muted);
+      font-size:15px;
+      line-height:1.5;
+    }
+
+    .error-box{
+      border:1px solid #fecaca;
+      background:#fef2f2;
+      color:#991b1b;
+      border-radius:12px;
+      padding:14px;
+      font-size:14px;
+    }
+
+    .footer-note{
+      color:var(--muted);
+      font-size:12px;
+      margin-top:8px;
+      line-height:1.5;
+    }
+
+    .muted{
+      color:var(--muted);
+    }
+  </style>
 </head>
-
 <body>
+  <div class="topbar">Carrier Payment Portal</div>
 
-<div class="header">
-Carrier Payment Portal
-</div>
+  <div class="wrap">
+    <div class="card">
+      <div class="hero">
+        <div>
+          <h1>Check payment status</h1>
+          <p class="sub">
+            Enter your DOT number and reference ID to view payment status.
+            This portal is read-only and does not create or approve payments.
+          </p>
+        </div>
+      </div>
 
-<div class="container">
+      <div class="search-grid">
+        <div>
+          <label for="dot">DOT Number</label>
+          <input id="dot" placeholder="Enter DOT number" />
+        </div>
 
-<div class="card">
+        <div>
+          <label for="reference">Reference ID</label>
+          <input id="reference" placeholder="Enter reference ID" />
+        </div>
 
-<h3>Check Payment Status</h3>
+        <button id="searchBtn" onclick="lookup()">Search</button>
+      </div>
 
-<input id="dot" placeholder="DOT Number">
-<input id="load" placeholder="Load / Invoice Number">
+      <div class="footer-note">
+        In your RoadSync data, this reference ID may also match the invoice number and load number shown inside the payment record.
+      </div>
+    </div>
 
-<button onclick="lookup()">Search</button>
+    <div id="messageSection"></div>
+    <div id="carrierSection"></div>
+    <div id="paymentsSection"></div>
+  </div>
 
-</div>
+  <script>
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, function (s) {
+        return {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        }[s];
+      });
+    }
 
-<div id="carrier"></div>
+    function statusClass(value) {
+      const s = String(value || "").toLowerCase();
 
-<div id="payments"></div>
+      if (
+        s.includes("paid") ||
+        s.includes("complete") ||
+        s.includes("completed") ||
+        s.includes("delivered") ||
+        s.includes("success")
+      ) {
+        return "ok";
+      }
 
-</div>
+      if (
+        s.includes("fail") ||
+        s.includes("cancel") ||
+        s.includes("void") ||
+        s.includes("reject") ||
+        s.includes("declin")
+      ) {
+        return "bad";
+      }
 
-<script>
+      return "warn";
+    }
 
-async function lookup(){
+    function clearResults() {
+      document.getElementById("messageSection").innerHTML = "";
+      document.getElementById("carrierSection").innerHTML = "";
+      document.getElementById("paymentsSection").innerHTML = "";
+    }
 
-const dot = document.getElementById("dot").value;
-const load = document.getElementById("load").value;
+    async function lookup() {
+      const dot = document.getElementById("dot").value.trim();
+      const reference = document.getElementById("reference").value.trim();
+      const button = document.getElementById("searchBtn");
 
-const res = await fetch(`/api/search?dot=${dot}&load=${load}`);
+      clearResults();
 
-const data = await res.json();
+      if (!dot || !reference) {
+        document.getElementById("messageSection").innerHTML = `
+          <div class="card">
+            <div class="result-empty">Enter both DOT number and reference ID.</div>
+          </div>
+        `;
+        return;
+      }
 
-const carrierDiv = document.getElementById("carrier");
-const paymentDiv = document.getElementById("payments");
+      button.disabled = true;
+      button.textContent = "Searching...";
 
-carrierDiv.innerHTML="";
-paymentDiv.innerHTML="";
+      try {
+        const res = await fetch(
+          `/api/search?dot=${encodeURIComponent(dot)}&reference=${encodeURIComponent(reference)}`
+        );
 
-if(!data.carrier){
+        const data = await res.json();
 
-paymentDiv.innerHTML="<div class='card'>No payment found.</div>";
+        if (!res.ok) {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="error-box">
+                ${esc(data.error || "Search failed")}
+                ${data.details ? `<div style="margin-top:6px;">${esc(data.details)}</div>` : ""}
+              </div>
+            </div>
+          `;
+          return;
+        }
 
-return;
+        if (!data.carrier) {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="result-empty">
+                No payment was found for that DOT number and reference ID combination.
+              </div>
+              ${
+                data?.debug?.message
+                  ? `<div class="footer-note">${esc(data.debug.message)}</div>`
+                  : ""
+              }
+            </div>
+          `;
+          return;
+        }
 
-}
+        renderCarrier(data.carrier);
+        renderPayments(data.payments || []);
+      } catch (err) {
+        document.getElementById("messageSection").innerHTML = `
+          <div class="card">
+            <div class="error-box">
+              Unable to complete the search.
+              <div style="margin-top:6px;">${esc(err.message || "Unknown error")}</div>
+            </div>
+          </div>
+        `;
+      } finally {
+        button.disabled = false;
+        button.textContent = "Search";
+      }
+    }
 
-carrierDiv.innerHTML = `
-<div class="card">
+    function renderCarrier(carrier) {
+      const paymentTypes = Array.isArray(carrier.payment_types) ? carrier.payment_types : [];
 
-<h3>${data.carrier.name}</h3>
+      document.getElementById("carrierSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Carrier</div>
+          <div class="grid-2">
+            <div>
+              <div class="kv">
+                <div class="k">Carrier Name</div>
+                <div class="v">${esc(carrier.name)}</div>
+              </div>
+              <div class="kv">
+                <div class="k">DOT</div>
+                <div class="v">${esc(carrier.dot)}</div>
+              </div>
+              <div class="kv">
+                <div class="k">MC</div>
+                <div class="v">${esc(carrier.mc)}</div>
+              </div>
+            </div>
 
-DOT: ${data.carrier.dot}<br>
-MC: ${data.carrier.mc}<br>
-Verified: ${data.carrier.verified}<br>
-Eligible Payment Methods: ${data.carrier.payment_types.join(", ")}
+            <div>
+              <div class="kv">
+                <div class="k">Verified</div>
+                <div class="v">${carrier.verified === "" ? "Not available" : esc(String(carrier.verified))}</div>
+              </div>
+              <div class="kv">
+                <div class="k">Factoring Company</div>
+                <div class="v">${carrier.isFactoringCompany ? "Yes" : "No"}</div>
+              </div>
+              <div class="kv">
+                <div class="k">Eligible Payment Methods</div>
+                <div class="v">
+                  ${
+                    paymentTypes.length
+                      ? paymentTypes.map(x => `<span class="pill">${esc(x)}</span>`).join("")
+                      : "Not available"
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
 
-</div>
-`;
+    function renderPayments(payments) {
+      if (!payments.length) {
+        document.getElementById("paymentsSection").innerHTML = `
+          <div class="card">
+            <div class="section-title">Payments</div>
+            <div class="result-empty">No payment details returned.</div>
+          </div>
+        `;
+        return;
+      }
 
-data.payments.forEach(p=>{
+      document.getElementById("paymentsSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Payments</div>
+          ${payments.map(renderPaymentCard).join("")}
+        </div>
+      `;
+    }
 
-let cls="pending";
+    function renderPaymentCard(payment) {
+      const topStatus = payment.transactionStatus || "Unknown";
+      const payables = Array.isArray(payment.payables) ? payment.payables : [];
 
-if(p.status==="paid") cls="paid";
-if(p.status==="failed") cls="failed";
+      return `
+        <div class="payment-card">
+          <div class="payment-status ${statusClass(topStatus)}">
+            Status: ${esc(topStatus)}
+          </div>
 
-paymentDiv.innerHTML += `
+          <div class="kv">
+            <div class="k">Reference ID</div>
+            <div class="v">${esc(payment.referenceId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Transaction ID</div>
+            <div class="v">${esc(payment.transactionId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">External ID</div>
+            <div class="v">${esc(payment.externalId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Amount</div>
+            <div class="v">${esc(payment.amount)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Payment Method</div>
+            <div class="v">${esc(payment.paymentMethod)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">ETA</div>
+            <div class="v">${esc(payment.eta)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Created</div>
+            <div class="v">${esc(payment.createdDatetime)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Updated</div>
+            <div class="v">${esc(payment.updatedDatetime)}</div>
+          </div>
 
-<div class="card">
+          ${
+            payables.length
+              ? `
+                <div style="margin-top:18px;">
+                  <div class="section-title">Associated Payables</div>
+                  ${payables.map(renderPayableCard).join("")}
+                </div>
+              `
+              : ""
+          }
+        </div>
+      `;
+    }
 
-<div class="status ${cls}">Status: ${p.status}</div>
+    function renderPayableCard(payable) {
+      return `
+        <div class="payment-card" style="margin-top:10px; background:#ffffff;">
+          <div class="payment-status ${statusClass(payable.payableStatus)}">
+            Payable Status: ${esc(payable.payableStatus || "Unknown")}
+          </div>
 
-Amount: $${p.amount}<br>
-Payment Method: ${p.method}<br>
-ETA: ${p.eta || "Processing"}<br>
-Transaction ID: ${p.id}
+          <div class="kv">
+            <div class="k">Payable ID</div>
+            <div class="v">${esc(payable.payableId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Invoice Number</div>
+            <div class="v">${esc(payable.invoiceNumber)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">PO Number</div>
+            <div class="v">${esc(payable.poNumber)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Load ID</div>
+            <div class="v">${esc(payable.loadId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Load Number</div>
+            <div class="v">${esc(payable.loadNumber)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Load External ID</div>
+            <div class="v">${esc(payable.loadExternalId)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Scheduled For Date</div>
+            <div class="v">${esc(payable.scheduledForDate)}</div>
+          </div>
+          <div class="kv">
+            <div class="k">Amount</div>
+            <div class="v">${esc(payable.amount)}</div>
+          </div>
+        </div>
+      `;
+    }
 
-</div>
+    document.getElementById("reference").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") lookup();
+    });
 
-`;
-
-});
-
-}
-
-</script>
-
+    document.getElementById("dot").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") lookup();
+    });
+  </script>
 </body>
 </html>
