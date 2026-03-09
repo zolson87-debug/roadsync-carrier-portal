@@ -11,7 +11,7 @@ const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = "https://api.roadsync.com/rspay";
 
 function normalize(value) {
-  return String(value ?? "").trim();
+  return String(value ?? "").trim().toUpperCase();
 }
 
 async function roadsyncGet(endpoint) {
@@ -31,26 +31,25 @@ async function roadsyncGet(endpoint) {
   return res.json();
 }
 
-function payeeMatchesDotOrMc(payee, dotOrMc) {
-  const target = normalize(dotOrMc).toUpperCase();
+function matchesDotOrMc(payee, dotOrMc) {
+  const target = normalize(dotOrMc);
 
   const candidates = [
     payee?.dot_number,
     payee?.mc_number
-  ].map(v => normalize(v).toUpperCase());
+  ].map(normalize);
 
   return candidates.includes(target);
 }
 
-function payableMatchesLoad(payable, load) {
-  const target = normalize(load).toUpperCase();
+function matchesLoad(loadObj, loadInput) {
+  const target = normalize(loadInput);
 
   const candidates = [
-    payable?.invoice_number,
-    payable?.po_number,
-    payable?.id,                 // sometimes the visible "payment id" is actually the payable id
-    payable?.idempotency_key
-  ].map(v => normalize(v).toUpperCase());
+    loadObj?.id,           // sometimes user may paste RoadSync load id
+    loadObj?.load_number,  // true load number
+    loadObj?.external_id   // external broker reference
+  ].map(normalize);
 
   return candidates.includes(target);
 }
@@ -63,101 +62,59 @@ app.get("/api/search", async (req, res) => {
       return res.status(400).json({ error: "load_and_dot_required" });
     }
 
-    const [payables, payees] = await Promise.all([
-      roadsyncGet("/payables"),
-      roadsyncGet("/payees")
-    ]);
+    const loads = await roadsyncGet("/loads");
+    const loadList = Array.isArray(loads) ? loads : [];
 
-    const payeesById = new Map(
-      (Array.isArray(payees) ? payees : []).map(p => [String(p.id), p])
-    );
+    const matches = loadList.filter(loadObj => {
+      if (!matchesLoad(loadObj, load)) return false;
 
-    const matches = [];
-
-    for (const payable of Array.isArray(payables) ? payables : []) {
-      if (!payableMatchesLoad(payable, load)) continue;
-
-      // Prefer the actual carrier
-      const carrierPayeeId = payable?.carrier_payee?.id;
-      const carrier = carrierPayeeId != null ? payeesById.get(String(carrierPayeeId)) : null;
-
-      if (carrier && payeeMatchesDotOrMc(carrier, dot)) {
-        matches.push({
-          carrier: {
-            id: carrier.id,
-            name: carrier.payee_name,
-            dot: carrier.dot_number || "",
-            mc: carrier.mc_number || "",
-            verified: carrier.is_verified,
-            isFactoringCompany: carrier.is_factoring_company,
-            paymentTypes: carrier.available_payment_types || []
-          },
-          payment: {
-            payableId: payable.id,
-            status: payable.status,
-            amount: payable.amount,
-            method: payable.payment_method,
-            eta: payable.eta || null,
-            invoiceNumber: payable.invoice_number || "",
-            poNumber: payable.po_number || "",
-            scheduledForDate: payable.scheduled_for_date || ""
-          }
-        });
-        continue;
+      // Prefer carrier_payee for carrier validation
+      if (loadObj.carrier_payee && matchesDotOrMc(loadObj.carrier_payee, dot)) {
+        return true;
       }
 
-      // Fallback to payable.payee in case payment is directly against factor/payee
-      const payeeId = payable?.payee?.id;
-      const payee = payeeId != null ? payeesById.get(String(payeeId)) : null;
-
-      if (payee && payeeMatchesDotOrMc(payee, dot)) {
-        matches.push({
-          carrier: {
-            id: payee.id,
-            name: payee.payee_name,
-            dot: payee.dot_number || "",
-            mc: payee.mc_number || "",
-            verified: payee.is_verified,
-            isFactoringCompany: payee.is_factoring_company,
-            paymentTypes: payee.available_payment_types || []
-          },
-          payment: {
-            payableId: payable.id,
-            status: payable.status,
-            amount: payable.amount,
-            method: payable.payment_method,
-            eta: payable.eta || null,
-            invoiceNumber: payable.invoice_number || "",
-            poNumber: payable.po_number || "",
-            scheduledForDate: payable.scheduled_for_date || ""
-          }
-        });
+      // Fallback to payee (for factors / direct payee situations)
+      if (loadObj.payee && matchesDotOrMc(loadObj.payee, dot)) {
+        return true;
       }
-    }
+
+      return false;
+    });
 
     if (matches.length === 0) {
       return res.json({
         carrier: null,
         payments: [],
         debug: {
-          message: "No payable matched that DOT/MC + load value."
+          message: "No load matched that DOT/MC + load value."
         }
       });
     }
 
-    const firstCarrierId = matches[0].carrier.id;
-    const payments = matches
-      .filter(m => m.carrier.id === firstCarrierId)
-      .map(m => m.payment);
+    const first = matches[0];
+    const carrier = first.carrier_payee || first.payee || {};
+    const payee = first.payee || {};
+
+    const payments = matches.map(item => ({
+      loadId: item.id || "",
+      loadNumber: item.load_number || "",
+      externalId: item.external_id || "",
+      status: item?.payable?.status || item.status || "",
+      amount: item?.payable?.amount || item.amount || "",
+      method: item?.payable?.payment_method || item?.payable?.transaction?.payment_method || "",
+      transactionId: item?.payable?.transaction?.id || "",
+      transactionStatus: item?.payable?.transaction?.status || "",
+      payableId: item?.payable?.id || ""
+    }));
 
     return res.json({
       carrier: {
-        name: matches[0].carrier.name,
-        dot: matches[0].carrier.dot,
-        mc: matches[0].carrier.mc,
-        verified: matches[0].carrier.verified,
-        isFactoringCompany: matches[0].carrier.isFactoringCompany,
-        payment_types: matches[0].carrier.paymentTypes
+        name: carrier.payee_name || payee.payee_name || "",
+        dot: carrier.dot_number || payee.dot_number || "",
+        mc: carrier.mc_number || payee.mc_number || "",
+        verified: carrier.is_verified ?? payee.is_verified ?? "",
+        isFactoringCompany: payee.is_factoring_company ?? false,
+        payment_types: payee.available_payment_types || []
       },
       payments
     });
