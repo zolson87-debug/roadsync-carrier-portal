@@ -9,9 +9,20 @@ app.use(express.json());
 const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
+
+// Example:
+// /transactions?reference_id={{reference_id}}
+// Adjust this if your actual RoadSync filter syntax differs.
 const TRANSACTION_SEARCH_TEMPLATE =
   process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
   "/transactions?reference_id={{reference_id}}";
+
+// Example:
+// /loads?load_number={{reference_id}}
+// Adjust this if your actual RoadSync filter syntax differs.
+const LOAD_SEARCH_TEMPLATE =
+  process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
+  "/loads?load_number={{reference_id}}";
 
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -20,11 +31,8 @@ function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
-function buildTransactionSearchPath(referenceId) {
-  return TRANSACTION_SEARCH_TEMPLATE.replace(
-    "{{reference_id}}",
-    encodeURIComponent(referenceId)
-  );
+function buildTemplatePath(template, referenceId) {
+  return template.replace("{{reference_id}}", encodeURIComponent(referenceId));
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -55,12 +63,12 @@ function toArray(data) {
   return [];
 }
 
-function dotOrMcMatches(payee, userValue) {
+function dotOrMcMatches(obj, userValue) {
   const target = normalizeIdLike(userValue);
 
   const candidates = [
-    payee?.dot_number,
-    payee?.mc_number
+    obj?.dot_number,
+    obj?.mc_number
   ]
     .map(normalizeIdLike)
     .filter(Boolean);
@@ -71,9 +79,7 @@ function dotOrMcMatches(payee, userValue) {
 function transactionMatchesReference(tx, reference) {
   const target = normalizeIdLike(reference);
 
-  if (normalizeIdLike(tx?.reference_id) === target) {
-    return true;
-  }
+  if (normalizeIdLike(tx?.reference_id) === target) return true;
 
   for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
     if (normalizeIdLike(p?.invoice_number) === target) return true;
@@ -83,7 +89,21 @@ function transactionMatchesReference(tx, reference) {
   return false;
 }
 
-async function loadCandidatePayees(tx) {
+function loadMatchesReference(loadObj, reference) {
+  const target = normalizeIdLike(reference);
+
+  const candidates = [
+    loadObj?.id,
+    loadObj?.load_number,
+    loadObj?.external_id
+  ]
+    .map(normalizeIdLike)
+    .filter(Boolean);
+
+  return candidates.includes(target);
+}
+
+async function loadCandidatePayeesFromTransaction(tx) {
   const candidates = [];
   const seen = new Set();
 
@@ -153,6 +173,65 @@ async function loadCandidatePayees(tx) {
   return candidates;
 }
 
+async function loadCandidatePayeesFromLoad(loadObj) {
+  const candidates = [];
+  const seen = new Set();
+
+  const idsToTry = [
+    loadObj?.carrier_payee?.id,
+    loadObj?.payee?.id
+  ].filter(Boolean);
+
+  for (const id of idsToTry) {
+    if (seen.has(`id:${id}`)) continue;
+    seen.add(`id:${id}`);
+
+    try {
+      const fullPayee = await roadsyncGet(`/payees/${id}`, true);
+      candidates.push({
+        source: `load.payee_id:${id}`,
+        payee: fullPayee,
+        lookupError: null
+      });
+    } catch (e) {
+      candidates.push({
+        source: `load.payee_id_lookup_failed:${id}`,
+        payee: { id },
+        lookupError: e.message
+      });
+    }
+  }
+
+  if (loadObj?.carrier_payee && !seen.has(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`)) {
+    seen.add(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`);
+    candidates.push({
+      source: "load.carrier_payee_inline",
+      payee: loadObj.carrier_payee,
+      lookupError: null
+    });
+  }
+
+  if (loadObj?.payee && !seen.has(`inline-payee:${loadObj.payee.id || loadObj.payee.payee_name}`)) {
+    seen.add(`inline-payee:${loadObj.payee.id || loadObj.payee.payee_name}`);
+    candidates.push({
+      source: "load.payee_inline",
+      payee: loadObj.payee,
+      lookupError: null
+    });
+  }
+
+  return candidates;
+}
+
+function firstMatchingCandidate(candidates, dot) {
+  for (const candidate of candidates) {
+    if (dotOrMcMatches(candidate.payee, dot)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 app.get("/api/search", async (req, res) => {
   try {
     const { dot, reference } = req.query;
@@ -163,71 +242,20 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const transactionPath = buildTransactionSearchPath(reference);
-    const transactionsRaw = await roadsyncGet(transactionPath, true);
+    // 1) Search transactions first: if found, payment exists
+    const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
+    const transactionsRaw = await roadsyncGet(txPath, true);
     const transactions = toArray(transactionsRaw);
-
-    if (transactions.length === 0) {
-      return res.json({
-        carrier: null,
-        payments: [],
-        debug: {
-          message: "No transaction found for that reference ID."
-        }
-      });
-    }
-
-    const exactReferenceMatches = transactions.filter(tx =>
+    const exactTransactionMatches = transactions.filter(tx =>
       transactionMatchesReference(tx, reference)
     );
 
-    if (exactReferenceMatches.length === 0) {
-      return res.json({
-        carrier: null,
-        payments: [],
-        debug: {
-          message: "Transactions were returned by RoadSync, but none matched the reference exactly.",
-          searchedReference: reference,
-          returnedTransactions: transactions.map(tx => ({
-            transactionId: tx.id || "",
-            referenceId: tx.reference_id || "",
-            invoiceNumbers: (Array.isArray(tx.payables) ? tx.payables : []).map(p => p.invoice_number || ""),
-            loadNumbers: (Array.isArray(tx.payables) ? tx.payables : []).map(p => p?.load?.load_number || "")
-          }))
-        }
-      });
-    }
-
-    for (const tx of exactReferenceMatches) {
-      const candidatePayees = await loadCandidatePayees(tx);
-
-      let matchedCandidate = null;
-      for (const candidate of candidatePayees) {
-        if (dotOrMcMatches(candidate.payee, dot)) {
-          matchedCandidate = candidate;
-          break;
-        }
-      }
+    for (const tx of exactTransactionMatches) {
+      const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
+      const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
 
       if (!matchedCandidate) {
-        return res.json({
-          carrier: null,
-          payments: [],
-          debug: {
-            message: "Reference matched exactly, but DOT/MC did not match any related payee record.",
-            transactionId: tx.id,
-            referenceId: tx.reference_id || reference || "",
-            payeeId: tx.payee_id || tx?.payee?.id || "",
-            checkedPayeeSources: candidatePayees.map(c => ({
-              source: c.source,
-              payeeId: c.payee?.id || "",
-              payeeName: c.payee?.payee_name || "",
-              dot: c.payee?.dot_number || "",
-              mc: c.payee?.mc_number || "",
-              lookupError: c.lookupError || null
-            }))
-          }
-        });
+        continue;
       }
 
       const payee = matchedCandidate.payee;
@@ -235,6 +263,7 @@ app.get("/api/search", async (req, res) => {
       const firstPayable = payables[0] || null;
 
       return res.json({
+        outcome: "payment_found",
         carrier: {
           name: payee.payee_name || "",
           dot: payee.dot_number || "",
@@ -243,39 +272,83 @@ app.get("/api/search", async (req, res) => {
           isFactoringCompany: payee.is_factoring_company ?? false,
           payment_types: payee.available_payment_types || []
         },
-        payments: [
-          {
-            transactionId: tx.id || "",
-            referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
-            externalId: tx.external_id || firstPayable?.load?.external_id || "",
-            transactionStatus: String(tx.status || "").toUpperCase(),
-            amount: tx.amount || "",
-            paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
-            eta: tx.eta || "",
-            createdDatetime: tx.created_datetime || "",
-            updatedDatetime: tx.updated_datetime || "",
-            matchedPayeeSource: matchedCandidate.source,
-            payables: payables.map(p => ({
-              payableId: p.id || "",
-              payableStatus: String(p.status || tx.status || "").toUpperCase(),
-              invoiceNumber: p.invoice_number || reference || "",
-              poNumber: p.po_number || "",
-              loadId: p.load_id || "",
-              loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
-              loadExternalId: p?.load?.external_id || "",
-              scheduledForDate: p.scheduled_for_date || "",
-              amount: p.amount || ""
-            }))
-          }
-        ]
+        payment: {
+          transactionId: tx.id || "",
+          referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
+          externalId: tx.external_id || firstPayable?.load?.external_id || "",
+          transactionStatus: String(tx.status || "").toUpperCase(),
+          amount: tx.amount || "",
+          paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
+          eta: tx.eta || "",
+          createdDatetime: tx.created_datetime || "",
+          updatedDatetime: tx.updated_datetime || "",
+          matchedPayeeSource: matchedCandidate.source,
+          payables: payables.map(p => ({
+            payableId: p.id || "",
+            payableStatus: String(p.status || tx.status || "").toUpperCase(),
+            invoiceNumber: p.invoice_number || reference || "",
+            poNumber: p.po_number || "",
+            loadId: p.load_id || "",
+            loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
+            loadExternalId: p?.load?.external_id || "",
+            scheduledForDate: p.scheduled_for_date || "",
+            amount: p.amount || ""
+          }))
+        }
       });
     }
 
+    // 2) If no payment found, search loads
+    const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
+    const loadsRaw = await roadsyncGet(loadPath, true);
+    const loads = toArray(loadsRaw);
+    const exactLoadMatches = loads.filter(loadObj =>
+      loadMatchesReference(loadObj, reference)
+    );
+
+    for (const loadObj of exactLoadMatches) {
+      const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
+      const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
+
+      if (!matchedCandidate) {
+        continue;
+      }
+
+      const payee = matchedCandidate.payee;
+
+      return res.json({
+        outcome: "load_found_no_payment",
+        carrier: {
+          name: payee.payee_name || "",
+          dot: payee.dot_number || "",
+          mc: payee.mc_number || "",
+          verified: payee.is_verified ?? "",
+          isFactoringCompany: payee.is_factoring_company ?? false,
+          payment_types: payee.available_payment_types || []
+        },
+        load: {
+          loadId: loadObj.id || "",
+          loadNumber: loadObj.load_number || reference || "",
+          externalId: loadObj.external_id || "",
+          loadStatus: String(loadObj.status || "").toUpperCase(),
+          amount: loadObj.amount || loadObj?.payable?.amount || "",
+          payableId: loadObj?.payable?.id || "",
+          payableStatus: String(loadObj?.payable?.status || "").toUpperCase(),
+          transactionId: loadObj?.payable?.transaction?.id || "",
+          transactionStatus: String(loadObj?.payable?.transaction?.status || "").toUpperCase(),
+          paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
+          matchedPayeeSource: matchedCandidate.source
+        },
+        message: "Load found, but no payment transaction was matched."
+      });
+    }
+
+    // 3) Nothing found
     return res.json({
+      outcome: "not_found",
       carrier: null,
-      payments: [],
       debug: {
-        message: "No matching transaction/payee combination found."
+        message: "No load or payment matched that DOT/MC and reference."
       }
     });
   } catch (err) {
@@ -288,7 +361,11 @@ app.get("/api/search", async (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE,
+    loadSearchTemplate: LOAD_SEARCH_TEMPLATE
+  });
 });
 
 const port = process.env.PORT || 3000;
