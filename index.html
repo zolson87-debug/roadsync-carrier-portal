@@ -16,6 +16,7 @@
       --ok:#15803d;
       --warn:#b45309;
       --bad:#b91c1c;
+      --info:#1d4ed8;
     }
 
     *{box-sizing:border-box}
@@ -188,6 +189,31 @@
       background:#fcfcfd;
     }
 
+    .status-banner{
+      border-radius:12px;
+      padding:14px 16px;
+      font-weight:700;
+      margin-bottom:16px;
+    }
+
+    .status-payment{
+      background:#ecfdf5;
+      color:var(--ok);
+      border:1px solid #bbf7d0;
+    }
+
+    .status-load{
+      background:#eff6ff;
+      color:var(--info);
+      border:1px solid #bfdbfe;
+    }
+
+    .status-notfound{
+      background:#fff7ed;
+      color:var(--warn);
+      border:1px solid #fed7aa;
+    }
+
     .payment-status{
       font-weight:700;
       font-size:15px;
@@ -228,10 +254,10 @@
     <div class="card">
       <div class="hero">
         <div>
-          <h1>Check payment status</h1>
+          <h1>Check load or payment status</h1>
           <p class="sub">
-            Enter your DOT number and reference ID to view payment status.
-            This portal is read-only and does not create or approve payments.
+            Enter your DOT number and load number / reference ID.
+            This portal checks both load records and payment transactions.
           </p>
         </div>
       </div>
@@ -243,21 +269,21 @@
         </div>
 
         <div>
-          <label for="reference">Reference ID</label>
-          <input id="reference" placeholder="Enter reference ID" />
+          <label for="reference">Load Number / Reference ID</label>
+          <input id="reference" placeholder="Enter load number or reference ID" />
         </div>
 
         <button id="searchBtn" onclick="lookup()">Search</button>
       </div>
 
       <div class="footer-note">
-        In your RoadSync data, this reference ID may also match the invoice number and load number shown inside the payment record.
+        Depending on the RoadSync record, this value may match the transaction reference ID, invoice number, or load number.
       </div>
     </div>
 
     <div id="messageSection"></div>
     <div id="carrierSection"></div>
-    <div id="paymentsSection"></div>
+    <div id="resultSection"></div>
   </div>
 
   <script>
@@ -281,7 +307,8 @@
         s.includes("complete") ||
         s.includes("completed") ||
         s.includes("delivered") ||
-        s.includes("success")
+        s.includes("success") ||
+        s.includes("processing")
       ) {
         return "ok";
       }
@@ -318,7 +345,7 @@
     function clearResults() {
       document.getElementById("messageSection").innerHTML = "";
       document.getElementById("carrierSection").innerHTML = "";
-      document.getElementById("paymentsSection").innerHTML = "";
+      document.getElementById("resultSection").innerHTML = "";
     }
 
     async function lookup() {
@@ -331,7 +358,7 @@
       if (!dot || !reference) {
         document.getElementById("messageSection").innerHTML = `
           <div class="card">
-            <div class="result-empty">Enter both DOT number and reference ID.</div>
+            <div class="result-empty">Enter both DOT number and load number / reference ID.</div>
           </div>
         `;
         return;
@@ -359,11 +386,12 @@
           return;
         }
 
-        if (!data.carrier) {
+        if (data.outcome === "not_found") {
           document.getElementById("messageSection").innerHTML = `
             <div class="card">
+              <div class="status-banner status-notfound">No load or payment found.</div>
               <div class="result-empty">
-                No payment was found for that DOT number and reference ID combination.
+                No load or payment matched that DOT number and load/reference value.
               </div>
               ${
                 data?.debug?.message
@@ -376,7 +404,28 @@
         }
 
         renderCarrier(data.carrier);
-        renderPayments(data.payments || []);
+
+        if (data.outcome === "payment_found") {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-payment">Payment found</div>
+              <div class="footer-note">A payment transaction exists for this load/reference.</div>
+            </div>
+          `;
+          renderPaymentResult(data.payment);
+          return;
+        }
+
+        if (data.outcome === "load_found_no_payment") {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-load">Load found, payment not yet created</div>
+              <div class="footer-note">${esc(data.message || "")}</div>
+            </div>
+          `;
+          renderLoadResult(data.load);
+          return;
+        }
       } catch (err) {
         document.getElementById("messageSection").innerHTML = `
           <div class="card">
@@ -439,82 +488,63 @@
       `;
     }
 
-    function renderPayments(payments) {
-      if (!payments.length) {
-        document.getElementById("paymentsSection").innerHTML = `
-          <div class="card">
-            <div class="section-title">Payments</div>
-            <div class="result-empty">No payment details returned.</div>
-          </div>
-        `;
-        return;
-      }
+    function renderPaymentResult(payment) {
+      const payables = Array.isArray(payment.payables) ? payment.payables : [];
 
-      document.getElementById("paymentsSection").innerHTML = `
+      document.getElementById("resultSection").innerHTML = `
         <div class="card">
-          <div class="section-title">Payments</div>
-          ${payments.map(renderPaymentCard).join("")}
+          <div class="section-title">Payment</div>
+          <div class="payment-card">
+            <div class="payment-status ${statusClass(payment.transactionStatus)}">
+              Status: ${esc(payment.transactionStatus || "Unknown")}
+            </div>
+
+            <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(payment.referenceId)}</div></div>
+            <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(payment.transactionId)}</div></div>
+            <div class="kv"><div class="k">External ID</div><div class="v">${esc(payment.externalId)}</div></div>
+            <div class="kv"><div class="k">Amount</div><div class="v">${esc(payment.amount)}</div></div>
+            <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(payment.paymentMethod)}</div></div>
+            <div class="kv"><div class="k">ETA</div><div class="v">${esc(formatDateTime(payment.eta))}</div></div>
+            <div class="kv"><div class="k">Created</div><div class="v">${esc(formatDateTime(payment.createdDatetime))}</div></div>
+            <div class="kv"><div class="k">Updated</div><div class="v">${esc(formatDateTime(payment.updatedDatetime))}</div></div>
+            <div class="kv"><div class="k">Matched Payee Source</div><div class="v">${esc(payment.matchedPayeeSource || "")}</div></div>
+
+            ${
+              payables.length
+                ? `
+                  <div style="margin-top:18px;">
+                    <div class="section-title">Associated Payables</div>
+                    ${payables.map(renderPayableCard).join("")}
+                  </div>
+                `
+                : ""
+            }
+          </div>
         </div>
       `;
     }
 
-    function renderPaymentCard(payment) {
-      const topStatus = payment.transactionStatus || "Unknown";
-      const payables = Array.isArray(payment.payables) ? payment.payables : [];
+    function renderLoadResult(load) {
+      document.getElementById("resultSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Load</div>
+          <div class="payment-card">
+            <div class="payment-status ${statusClass(load.transactionStatus || load.payableStatus || load.loadStatus)}">
+              Status: ${esc(load.transactionStatus || load.payableStatus || load.loadStatus || "LOAD FOUND")}
+            </div>
 
-      return `
-        <div class="payment-card">
-          <div class="payment-status ${statusClass(topStatus)}">
-            Status: ${esc(topStatus)}
+            <div class="kv"><div class="k">Load Number</div><div class="v">${esc(load.loadNumber)}</div></div>
+            <div class="kv"><div class="k">Load ID</div><div class="v">${esc(load.loadId)}</div></div>
+            <div class="kv"><div class="k">External ID</div><div class="v">${esc(load.externalId)}</div></div>
+            <div class="kv"><div class="k">Amount</div><div class="v">${esc(load.amount)}</div></div>
+            <div class="kv"><div class="k">Load Status</div><div class="v">${esc(load.loadStatus)}</div></div>
+            <div class="kv"><div class="k">Payable ID</div><div class="v">${esc(load.payableId)}</div></div>
+            <div class="kv"><div class="k">Payable Status</div><div class="v">${esc(load.payableStatus)}</div></div>
+            <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(load.transactionId)}</div></div>
+            <div class="kv"><div class="k">Transaction Status</div><div class="v">${esc(load.transactionStatus)}</div></div>
+            <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(load.paymentMethod)}</div></div>
+            <div class="kv"><div class="k">Matched Payee Source</div><div class="v">${esc(load.matchedPayeeSource || "")}</div></div>
           </div>
-
-          <div class="kv">
-            <div class="k">Reference ID</div>
-            <div class="v">${esc(payment.referenceId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Transaction ID</div>
-            <div class="v">${esc(payment.transactionId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">External ID</div>
-            <div class="v">${esc(payment.externalId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Amount</div>
-            <div class="v">${esc(payment.amount)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Payment Method</div>
-            <div class="v">${esc(payment.paymentMethod)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">ETA</div>
-            <div class="v">${esc(formatDateTime(payment.eta))}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Created</div>
-            <div class="v">${esc(formatDateTime(payment.createdDatetime))}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Updated</div>
-            <div class="v">${esc(formatDateTime(payment.updatedDatetime))}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Matched Payee Source</div>
-            <div class="v">${esc(payment.matchedPayeeSource || "")}</div>
-          </div>
-
-          ${
-            payables.length
-              ? `
-                <div style="margin-top:18px;">
-                  <div class="section-title">Associated Payables</div>
-                  ${payables.map(renderPayableCard).join("")}
-                </div>
-              `
-              : ""
-          }
         </div>
       `;
     }
@@ -526,38 +556,14 @@
             Payable Status: ${esc(payable.payableStatus || "Unknown")}
           </div>
 
-          <div class="kv">
-            <div class="k">Payable ID</div>
-            <div class="v">${esc(payable.payableId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Invoice Number</div>
-            <div class="v">${esc(payable.invoiceNumber)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">PO Number</div>
-            <div class="v">${esc(payable.poNumber)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Load ID</div>
-            <div class="v">${esc(payable.loadId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Load Number</div>
-            <div class="v">${esc(payable.loadNumber)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Load External ID</div>
-            <div class="v">${esc(payable.loadExternalId)}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Scheduled For Date</div>
-            <div class="v">${esc(formatDateTime(payable.scheduledForDate))}</div>
-          </div>
-          <div class="kv">
-            <div class="k">Amount</div>
-            <div class="v">${esc(payable.amount)}</div>
-          </div>
+          <div class="kv"><div class="k">Payable ID</div><div class="v">${esc(payable.payableId)}</div></div>
+          <div class="kv"><div class="k">Invoice Number</div><div class="v">${esc(payable.invoiceNumber)}</div></div>
+          <div class="kv"><div class="k">PO Number</div><div class="v">${esc(payable.poNumber)}</div></div>
+          <div class="kv"><div class="k">Load ID</div><div class="v">${esc(payable.loadId)}</div></div>
+          <div class="kv"><div class="k">Load Number</div><div class="v">${esc(payable.loadNumber)}</div></div>
+          <div class="kv"><div class="k">Load External ID</div><div class="v">${esc(payable.loadExternalId)}</div></div>
+          <div class="kv"><div class="k">Scheduled For Date</div><div class="v">${esc(formatDateTime(payable.scheduledForDate))}</div></div>
+          <div class="kv"><div class="k">Amount</div><div class="v">${esc(payable.amount)}</div></div>
         </div>
       `;
     }
