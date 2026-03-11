@@ -27,7 +27,7 @@
       --info-line:#bfdbfe;
     }
 
-    *{box-sizing:border-box}
+    * { box-sizing: border-box; }
 
     body{
       margin:0;
@@ -466,7 +466,7 @@
 
       try {
         const res = await fetch(
-          \`/api/search?dot=\${encodeURIComponent(dot)}&reference=\${encodeURIComponent(reference)}\`
+          `/api/search?dot=${encodeURIComponent(dot)}&reference=${encodeURIComponent(reference)}`
         );
 
         const data = await res.json();
