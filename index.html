@@ -483,22 +483,46 @@
           return;
         }
 
-        if (data.outcome === "not_found") {
-          document.getElementById("messageSection").innerHTML = `
-            <div class="card">
-              <div class="status-banner status-notfound">No load or payment found</div>
-              <div class="result-empty">
-                No load or payment matched that DOT number and load/reference value.
-              </div>
-              ${
-                data?.debug?.message
-                  ? `<div class="footer-note">${esc(data.debug.message)}</div>`
-                  : ""
-              }
-            </div>
-          `;
-          return;
-        }
+       if (data.outcome === "not_found") {
+
+  document.getElementById("messageSection").innerHTML = `
+    <div class="card">
+
+      <div class="status-banner status-notfound">
+        Your DOT Number was not found
+      </div>
+
+      <div class="result-empty" style="margin-bottom:16px;">
+        Your DOT Number was not found in our payment system.
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <a href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+           target="_blank"
+           style="
+             display:inline-block;
+             background:#2563eb;
+             color:white;
+             padding:14px 22px;
+             border-radius:10px;
+             font-weight:700;
+             text-decoration:none;
+             font-size:14px;
+           ">
+           Register for RoadSync to Receive Payment
+        </a>
+      </div>
+
+      <div class="footer-note">
+        If you are already registered for RoadSync but are seeing this error,
+        please email <b>payments@autosled.com</b>.
+      </div>
+
+    </div>
+  `;
+
+  return;
+}
 
         renderCarrier(data.carrier);
 
