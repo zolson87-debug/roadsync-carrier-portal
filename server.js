@@ -57,14 +57,36 @@ function toArray(data) {
   return [];
 }
 
+function extractDotAndMc(obj, found = []) {
+  if (!obj || typeof obj !== "object") return found;
+
+  for (const [key, value] of Object.entries(obj)) {
+    const keyLower = String(key).toLowerCase();
+
+    if (
+      keyLower.includes("dot") ||
+      keyLower.includes("usdot") ||
+      keyLower === "mc" ||
+      keyLower.includes("mc_number") ||
+      keyLower.includes("mcnumber")
+    ) {
+      const cleaned = normalizeIdLike(value);
+      if (cleaned) found.push(cleaned);
+    }
+
+    if (value && typeof value === "object") {
+      extractDotAndMc(value, found);
+    }
+  }
+
+  return [...new Set(found)];
+}
+
 function dotOrMcMatches(obj, userValue) {
   const target = normalizeIdLike(userValue);
+  if (!target) return false;
 
-  const candidates = [
-    obj?.dot_number,
-    obj?.mc_number
-  ].map(normalizeIdLike).filter(Boolean);
-
+  const candidates = extractDotAndMc(obj);
   return candidates.includes(target);
 }
 
@@ -72,10 +94,17 @@ function transactionMatchesReference(tx, reference) {
   const target = normalizeIdLike(reference);
 
   if (normalizeIdLike(tx?.reference_id) === target) return true;
+  if (normalizeIdLike(tx?.external_id) === target) return true;
+  if (normalizeIdLike(tx?.id) === target) return true;
 
   for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
     if (normalizeIdLike(p?.invoice_number) === target) return true;
+    if (normalizeIdLike(p?.po_number) === target) return true;
+    if (normalizeIdLike(p?.id) === target) return true;
+    if (normalizeIdLike(p?.load_id) === target) return true;
+    if (normalizeIdLike(p?.load?.id) === target) return true;
     if (normalizeIdLike(p?.load?.load_number) === target) return true;
+    if (normalizeIdLike(p?.load?.external_id) === target) return true;
   }
 
   return false;
@@ -87,7 +116,8 @@ function loadMatchesReference(loadObj, reference) {
   const candidates = [
     loadObj?.id,
     loadObj?.load_number,
-    loadObj?.external_id
+    loadObj?.external_id,
+    loadObj?.reference_id
   ].map(normalizeIdLike).filter(Boolean);
 
   return candidates.includes(target);
@@ -192,7 +222,10 @@ async function loadCandidatePayeesFromLoad(loadObj) {
     }
   }
 
-  if (loadObj?.carrier_payee && !seen.has(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`)) {
+  if (
+    loadObj?.carrier_payee &&
+    !seen.has(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`)
+  ) {
     seen.add(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`);
     candidates.push({
       source: "load.carrier_payee_inline",
@@ -211,6 +244,16 @@ async function loadCandidatePayeesFromLoad(loadObj) {
   }
 
   return candidates;
+}
+
+function summarizeCandidate(candidate) {
+  return {
+    source: candidate.source,
+    payeeId: candidate.payee?.id || "",
+    payeeName: candidate.payee?.payee_name || candidate.payee?.name || "",
+    extractedDotMcValues: extractDotAndMc(candidate.payee),
+    lookupError: candidate.lookupError || null
+  };
 }
 
 function firstMatchingCandidate(candidates, dot) {
@@ -232,13 +275,24 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
+    const normalizedDot = normalizeIdLike(dot);
+    const normalizedReference = normalizeIdLike(reference);
+
+    console.log("=== /api/search request ===");
+    console.log("DOT:", dot, "=>", normalizedDot);
+    console.log("REFERENCE:", reference, "=>", normalizedReference);
+
     let foundReferenceButDotMismatch = null;
     let foundReferenceSomewhere = false;
 
     // Search transactions first
     const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
+    console.log("Transaction search path:", txPath);
+
     const transactionsRaw = await roadsyncGet(txPath, true);
     const transactions = toArray(transactionsRaw);
+
+    console.log("Transactions returned:", transactions.length);
 
     if (transactions.length > 0) {
       foundReferenceSomewhere = true;
@@ -248,8 +302,16 @@ app.get("/api/search", async (req, res) => {
       transactionMatchesReference(tx, reference)
     );
 
+    console.log("Exact transaction matches:", exactTransactionMatches.length);
+
     for (const tx of exactTransactionMatches) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
+
+      console.log(
+        "Transaction candidate payees:",
+        JSON.stringify(candidatePayees.map(summarizeCandidate), null, 2)
+      );
+
       const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
 
       if (!matchedCandidate) {
@@ -257,14 +319,8 @@ app.get("/api/search", async (req, res) => {
           scope: "transaction",
           transactionId: tx.id || "",
           referenceId: tx.reference_id || reference || "",
-          checkedPayeeSources: candidatePayees.map(c => ({
-            source: c.source,
-            payeeId: c.payee?.id || "",
-            payeeName: c.payee?.payee_name || "",
-            dot: c.payee?.dot_number || "",
-            mc: c.payee?.mc_number || "",
-            lookupError: c.lookupError || null
-          }))
+          searchedDot: normalizedDot,
+          checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
       }
@@ -276,9 +332,9 @@ app.get("/api/search", async (req, res) => {
       return res.json({
         outcome: "payment_found",
         carrier: {
-          name: payee.payee_name || "",
-          dot: payee.dot_number || "",
-          mc: payee.mc_number || "",
+          name: payee.payee_name || payee.name || "",
+          dot: payee.dot_number || payee.usdot || "",
+          mc: payee.mc_number || payee.mc || "",
           verified: payee.is_verified ?? "",
           isFactoringCompany: payee.is_factoring_company ?? false,
           payment_types: payee.available_payment_types || []
@@ -311,8 +367,12 @@ app.get("/api/search", async (req, res) => {
 
     // Search loads second
     const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
+    console.log("Load search path:", loadPath);
+
     const loadsRaw = await roadsyncGet(loadPath, true);
     const loads = toArray(loadsRaw);
+
+    console.log("Loads returned:", loads.length);
 
     if (loads.length > 0) {
       foundReferenceSomewhere = true;
@@ -322,8 +382,16 @@ app.get("/api/search", async (req, res) => {
       loadMatchesReference(loadObj, reference)
     );
 
+    console.log("Exact load matches:", exactLoadMatches.length);
+
     for (const loadObj of exactLoadMatches) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
+
+      console.log(
+        "Load candidate payees:",
+        JSON.stringify(candidatePayees.map(summarizeCandidate), null, 2)
+      );
+
       const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
 
       if (!matchedCandidate) {
@@ -331,14 +399,8 @@ app.get("/api/search", async (req, res) => {
           scope: "load",
           loadId: loadObj.id || "",
           loadNumber: loadObj.load_number || reference || "",
-          checkedPayeeSources: candidatePayees.map(c => ({
-            source: c.source,
-            payeeId: c.payee?.id || "",
-            payeeName: c.payee?.payee_name || "",
-            dot: c.payee?.dot_number || "",
-            mc: c.payee?.mc_number || "",
-            lookupError: c.lookupError || null
-          }))
+          searchedDot: normalizedDot,
+          checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
       }
@@ -348,9 +410,9 @@ app.get("/api/search", async (req, res) => {
       return res.json({
         outcome: "load_found_no_payment",
         carrier: {
-          name: payee.payee_name || "",
-          dot: payee.dot_number || "",
-          mc: payee.mc_number || "",
+          name: payee.payee_name || payee.name || "",
+          dot: payee.dot_number || payee.usdot || "",
+          mc: payee.mc_number || payee.mc || "",
           verified: payee.is_verified ?? "",
           isFactoringCompany: payee.is_factoring_company ?? false,
           payment_types: payee.available_payment_types || []
@@ -373,6 +435,11 @@ app.get("/api/search", async (req, res) => {
     }
 
     if (foundReferenceButDotMismatch) {
+      console.log(
+        "Reference found but DOT mismatch:",
+        JSON.stringify(foundReferenceButDotMismatch, null, 2)
+      );
+
       return res.json({
         outcome: "reference_found_dot_mismatch",
         carrier: null,
@@ -381,6 +448,8 @@ app.get("/api/search", async (req, res) => {
     }
 
     if (foundReferenceSomewhere) {
+      console.log("Reference found, but lookup incomplete.");
+
       return res.json({
         outcome: "reference_found_lookup_incomplete",
         carrier: null,
@@ -398,7 +467,7 @@ app.get("/api/search", async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err);
+    console.error("Search failed:", err);
     return res.status(500).json({
       error: "search_failed",
       details: err.message
