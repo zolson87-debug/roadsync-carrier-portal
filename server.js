@@ -90,54 +90,117 @@ function dotOrMcMatches(obj, userValue) {
   return candidates.includes(target);
 }
 
-function transactionMatchesReference(tx, reference) {
-  const target = normalizeIdLike(reference);
+function getValueAtPath(obj, path) {
+  return path.split(".").reduce((acc, part) => acc?.[part], obj);
+}
 
-  const topLevelCandidates = [
-    tx?.id,
-    tx?.reference_id,
-    tx?.external_id
-  ].map(normalizeIdLike).filter(Boolean);
+function findReferenceHits(obj, target, prefix = "", hits = []) {
+  if (!obj || typeof obj !== "object") return hits;
 
-  if (topLevelCandidates.includes(target)) return true;
-
-  for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
-    const payableCandidates = [
-      p?.id,
-      p?.invoice_number,
-      p?.po_number,
-      p?.load_id,
-      p?.reference_id,
-      p?.external_id,
-      p?.load?.id,
-      p?.load?.load_number,
-      p?.load?.external_id,
-      p?.load?.reference_id
-    ].map(normalizeIdLike).filter(Boolean);
-
-    if (payableCandidates.includes(target)) return true;
+  if (Array.isArray(obj)) {
+    obj.forEach((item, index) => {
+      findReferenceHits(item, target, `${prefix}[${index}]`, hits);
+    });
+    return hits;
   }
 
-  return false;
+  for (const [key, value] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      continue;
+    }
+
+    if (typeof value === "string" || typeof value === "number") {
+      const normalized = normalizeIdLike(value);
+      if (normalized === target) {
+        hits.push({
+          path,
+          value: String(value)
+        });
+      }
+    } else if (typeof value === "object") {
+      findReferenceHits(value, target, path, hits);
+    }
+  }
+
+  return hits;
+}
+
+function summarizeTransaction(tx) {
+  return {
+    id: tx?.id,
+    reference_id: tx?.reference_id,
+    external_id: tx?.external_id,
+    status: tx?.status,
+    payee_id: tx?.payee_id,
+    payables: Array.isArray(tx?.payables)
+      ? tx.payables.slice(0, 3).map(p => ({
+          id: p?.id,
+          invoice_number: p?.invoice_number,
+          po_number: p?.po_number,
+          load_id: p?.load_id,
+          reference_id: p?.reference_id,
+          external_id: p?.external_id,
+          carrier_payee_id: p?.carrier_payee?.id,
+          carrier_payee_name: p?.carrier_payee?.payee_name,
+          load: p?.load
+            ? {
+                id: p?.load?.id,
+                load_number: p?.load?.load_number,
+                external_id: p?.load?.external_id,
+                reference_id: p?.load?.reference_id
+              }
+            : null
+        }))
+      : []
+  };
+}
+
+function summarizeLoad(loadObj) {
+  return {
+    id: loadObj?.id,
+    load_number: loadObj?.load_number,
+    external_id: loadObj?.external_id,
+    reference_id: loadObj?.reference_id,
+    status: loadObj?.status,
+    carrier_payee_id: loadObj?.carrier_payee?.id,
+    carrier_payee_name: loadObj?.carrier_payee?.payee_name,
+    payee_id: loadObj?.payee?.id,
+    payee_name: loadObj?.payee?.payee_name,
+    payable: loadObj?.payable
+      ? {
+          id: loadObj?.payable?.id,
+          reference_id: loadObj?.payable?.reference_id,
+          external_id: loadObj?.payable?.external_id,
+          status: loadObj?.payable?.status,
+          payment_method: loadObj?.payable?.payment_method,
+          transaction: loadObj?.payable?.transaction
+            ? {
+                id: loadObj?.payable?.transaction?.id,
+                reference_id: loadObj?.payable?.transaction?.reference_id,
+                external_id: loadObj?.payable?.transaction?.external_id,
+                status: loadObj?.payable?.transaction?.status
+              }
+            : null
+        }
+      : null
+  };
+}
+
+function transactionMatchesReference(tx, reference) {
+  const target = normalizeIdLike(reference);
+  const hits = findReferenceHits(tx, target);
+  return hits.length > 0;
 }
 
 function loadMatchesReference(loadObj, reference) {
   const target = normalizeIdLike(reference);
-
-  const candidates = [
-    loadObj?.id,
-    loadObj?.load_number,
-    loadObj?.external_id,
-    loadObj?.reference_id,
-    loadObj?.payable?.id,
-    loadObj?.payable?.reference_id,
-    loadObj?.payable?.external_id,
-    loadObj?.payable?.transaction?.id,
-    loadObj?.payable?.transaction?.reference_id,
-    loadObj?.payable?.transaction?.external_id
-  ].map(normalizeIdLike).filter(Boolean);
-
-  return candidates.includes(target);
+  const hits = findReferenceHits(loadObj, target);
+  return hits.length > 0;
 }
 
 async function loadCandidatePayeesFromTransaction(tx) {
@@ -302,7 +365,6 @@ app.get("/api/search", async (req, res) => {
     let foundReferenceButDotMismatch = null;
     let foundReferenceSomewhere = false;
 
-    // Search transactions first
     const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
     console.log("Transaction search path:", txPath);
 
@@ -312,34 +374,7 @@ app.get("/api/search", async (req, res) => {
     console.log("Transactions returned:", transactions.length);
     console.log(
       "Transaction sample:",
-      JSON.stringify(
-        transactions.slice(0, 3).map(tx => ({
-          id: tx?.id,
-          reference_id: tx?.reference_id,
-          external_id: tx?.external_id,
-          status: tx?.status,
-          payables: Array.isArray(tx?.payables)
-            ? tx.payables.slice(0, 3).map(p => ({
-                id: p?.id,
-                invoice_number: p?.invoice_number,
-                po_number: p?.po_number,
-                load_id: p?.load_id,
-                reference_id: p?.reference_id,
-                external_id: p?.external_id,
-                load: p?.load
-                  ? {
-                      id: p?.load?.id,
-                      load_number: p?.load?.load_number,
-                      external_id: p?.load?.external_id,
-                      reference_id: p?.load?.reference_id
-                    }
-                  : null
-              }))
-            : []
-        })),
-        null,
-        2
-      )
+      JSON.stringify(transactions.slice(0, 3).map(summarizeTransaction), null, 2)
     );
 
     const exactTransactionMatches = transactions.filter(tx =>
@@ -347,6 +382,24 @@ app.get("/api/search", async (req, res) => {
     );
 
     console.log("Exact transaction matches:", exactTransactionMatches.length);
+
+    if (exactTransactionMatches.length > 0) {
+      console.log(
+        "Transaction match details:",
+        JSON.stringify(
+          exactTransactionMatches.slice(0, 5).map(tx => ({
+            summary: summarizeTransaction(tx),
+            referenceHits: findReferenceHits(tx, normalizedReference)
+          })),
+          null,
+          2
+        )
+      );
+    }
+
+    if (transactions.length > 0) {
+      foundReferenceSomewhere = true;
+    }
 
     for (const tx of exactTransactionMatches) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
@@ -362,8 +415,9 @@ app.get("/api/search", async (req, res) => {
         foundReferenceButDotMismatch = {
           scope: "transaction",
           transactionId: tx.id || "",
-          referenceId: tx.reference_id || reference || "",
+          searchedReference: normalizedReference,
           searchedDot: normalizedDot,
+          referenceHits: findReferenceHits(tx, normalizedReference),
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
@@ -409,7 +463,6 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // Search loads second
     const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
     console.log("Load search path:", loadPath);
 
@@ -419,34 +472,7 @@ app.get("/api/search", async (req, res) => {
     console.log("Loads returned:", loads.length);
     console.log(
       "Load sample:",
-      JSON.stringify(
-        loads.slice(0, 3).map(loadObj => ({
-          id: loadObj?.id,
-          load_number: loadObj?.load_number,
-          external_id: loadObj?.external_id,
-          reference_id: loadObj?.reference_id,
-          status: loadObj?.status,
-          payable: loadObj?.payable
-            ? {
-                id: loadObj?.payable?.id,
-                reference_id: loadObj?.payable?.reference_id,
-                external_id: loadObj?.payable?.external_id,
-                status: loadObj?.payable?.status,
-                payment_method: loadObj?.payable?.payment_method,
-                transaction: loadObj?.payable?.transaction
-                  ? {
-                      id: loadObj?.payable?.transaction?.id,
-                      reference_id: loadObj?.payable?.transaction?.reference_id,
-                      external_id: loadObj?.payable?.transaction?.external_id,
-                      status: loadObj?.payable?.transaction?.status
-                    }
-                  : null
-              }
-            : null
-        })),
-        null,
-        2
-      )
+      JSON.stringify(loads.slice(0, 3).map(summarizeLoad), null, 2)
     );
 
     const exactLoadMatches = loads.filter(loadObj =>
@@ -454,6 +480,24 @@ app.get("/api/search", async (req, res) => {
     );
 
     console.log("Exact load matches:", exactLoadMatches.length);
+
+    if (exactLoadMatches.length > 0) {
+      console.log(
+        "Load match details:",
+        JSON.stringify(
+          exactLoadMatches.slice(0, 5).map(loadObj => ({
+            summary: summarizeLoad(loadObj),
+            referenceHits: findReferenceHits(loadObj, normalizedReference)
+          })),
+          null,
+          2
+        )
+      );
+    }
+
+    if (loads.length > 0) {
+      foundReferenceSomewhere = true;
+    }
 
     for (const loadObj of exactLoadMatches) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
@@ -469,8 +513,9 @@ app.get("/api/search", async (req, res) => {
         foundReferenceButDotMismatch = {
           scope: "load",
           loadId: loadObj.id || "",
-          loadNumber: loadObj.load_number || reference || "",
+          searchedReference: normalizedReference,
           searchedDot: normalizedDot,
+          referenceHits: findReferenceHits(loadObj, normalizedReference),
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
@@ -520,12 +565,12 @@ app.get("/api/search", async (req, res) => {
 
     if (foundReferenceSomewhere) {
       console.log("Reference found, but lookup incomplete.");
-
       return res.json({
         outcome: "reference_found_lookup_incomplete",
         carrier: null,
         debug: {
-          message: "RoadSync returned records for this reference, but the portal could not complete a reliable carrier match."
+          searchedReference: normalizedReference,
+          message: "RoadSync returned records from the search endpoints, but none of those records contained the requested reference in any scanned field."
         }
       });
     }
@@ -534,6 +579,7 @@ app.get("/api/search", async (req, res) => {
       outcome: "not_found",
       carrier: null,
       debug: {
+        searchedReference: normalizedReference,
         message: "No load or payment matched that DOT/MC and reference."
       }
     });
