@@ -12,11 +12,14 @@ const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspa
 
 const TRANSACTION_SEARCH_TEMPLATE =
   process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
-  "/transactions?reference_id={{reference_id}}";
+  "/transactions";
 
 const LOAD_SEARCH_TEMPLATE =
   process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
-  "/loads?load_number={{reference_id}}";
+  "/loads";
+
+const ROADSYNC_PAGE_SIZE = Number(process.env.ROADSYNC_PAGE_SIZE || 100);
+const ROADSYNC_MAX_PAGES = Number(process.env.ROADSYNC_MAX_PAGES || 10);
 
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -25,8 +28,9 @@ function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
-function buildTemplatePath(template, referenceId) {
-  return template.replace("{{reference_id}}", encodeURIComponent(referenceId));
+function appendPagination(endpoint, page, perPage) {
+  const separator = endpoint.includes("?") ? "&" : "?";
+  return `${endpoint}${separator}page=${page}&per_page=${perPage}`;
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -57,6 +61,45 @@ function toArray(data) {
   return [];
 }
 
+async function roadsyncGetPaginated(baseEndpoint, maxPages = ROADSYNC_MAX_PAGES, perPage = ROADSYNC_PAGE_SIZE) {
+  const all = [];
+  const seenIds = new Set();
+
+  for (let page = 1; page <= maxPages; page++) {
+    const endpoint = appendPagination(baseEndpoint, page, perPage);
+    console.log(`Fetching ${endpoint}`);
+
+    const raw = await roadsyncGet(endpoint, true);
+    const batch = toArray(raw);
+
+    console.log(`Fetched page ${page}: ${batch.length} records`);
+
+    if (!batch.length) {
+      break;
+    }
+
+    let addedThisPage = 0;
+
+    for (const item of batch) {
+      const dedupeKey = `${item?.id ?? "no-id"}-${item?.external_id ?? ""}-${item?.reference_id ?? ""}`;
+
+      if (!seenIds.has(dedupeKey)) {
+        seenIds.add(dedupeKey);
+        all.push(item);
+        addedThisPage++;
+      }
+    }
+
+    console.log(`Added ${addedThisPage} unique records from page ${page}`);
+
+    if (batch.length < perPage) {
+      break;
+    }
+  }
+
+  return all;
+}
+
 function extractDotAndMc(obj, found = []) {
   if (!obj || typeof obj !== "object") return found;
 
@@ -85,122 +128,57 @@ function extractDotAndMc(obj, found = []) {
 function dotOrMcMatches(obj, userValue) {
   const target = normalizeIdLike(userValue);
   if (!target) return false;
-
-  const candidates = extractDotAndMc(obj);
-  return candidates.includes(target);
+  return extractDotAndMc(obj).includes(target);
 }
 
-function getValueAtPath(obj, path) {
-  return path.split(".").reduce((acc, part) => acc?.[part], obj);
-}
+function getTransactionReferenceCandidates(tx) {
+  const values = [
+    tx?.id,
+    tx?.reference_id,
+    tx?.external_id
+  ];
 
-function findReferenceHits(obj, target, prefix = "", hits = []) {
-  if (!obj || typeof obj !== "object") return hits;
-
-  if (Array.isArray(obj)) {
-    obj.forEach((item, index) => {
-      findReferenceHits(item, target, `${prefix}[${index}]`, hits);
-    });
-    return hits;
+  for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
+    values.push(
+      p?.id,
+      p?.invoice_number,
+      p?.po_number,
+      p?.load_id,
+      p?.reference_id,
+      p?.external_id,
+      p?.load?.id,
+      p?.load?.load_number,
+      p?.load?.external_id,
+      p?.load?.reference_id
+    );
   }
 
-  for (const [key, value] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-
-    if (
-      value === null ||
-      value === undefined
-    ) {
-      continue;
-    }
-
-    if (typeof value === "string" || typeof value === "number") {
-      const normalized = normalizeIdLike(value);
-      if (normalized === target) {
-        hits.push({
-          path,
-          value: String(value)
-        });
-      }
-    } else if (typeof value === "object") {
-      findReferenceHits(value, target, path, hits);
-    }
-  }
-
-  return hits;
+  return [...new Set(values.map(normalizeIdLike).filter(Boolean))];
 }
 
-function summarizeTransaction(tx) {
-  return {
-    id: tx?.id,
-    reference_id: tx?.reference_id,
-    external_id: tx?.external_id,
-    status: tx?.status,
-    payee_id: tx?.payee_id,
-    payables: Array.isArray(tx?.payables)
-      ? tx.payables.slice(0, 3).map(p => ({
-          id: p?.id,
-          invoice_number: p?.invoice_number,
-          po_number: p?.po_number,
-          load_id: p?.load_id,
-          reference_id: p?.reference_id,
-          external_id: p?.external_id,
-          carrier_payee_id: p?.carrier_payee?.id,
-          carrier_payee_name: p?.carrier_payee?.payee_name,
-          load: p?.load
-            ? {
-                id: p?.load?.id,
-                load_number: p?.load?.load_number,
-                external_id: p?.load?.external_id,
-                reference_id: p?.load?.reference_id
-              }
-            : null
-        }))
-      : []
-  };
-}
-
-function summarizeLoad(loadObj) {
-  return {
-    id: loadObj?.id,
-    load_number: loadObj?.load_number,
-    external_id: loadObj?.external_id,
-    reference_id: loadObj?.reference_id,
-    status: loadObj?.status,
-    carrier_payee_id: loadObj?.carrier_payee?.id,
-    carrier_payee_name: loadObj?.carrier_payee?.payee_name,
-    payee_id: loadObj?.payee?.id,
-    payee_name: loadObj?.payee?.payee_name,
-    payable: loadObj?.payable
-      ? {
-          id: loadObj?.payable?.id,
-          reference_id: loadObj?.payable?.reference_id,
-          external_id: loadObj?.payable?.external_id,
-          status: loadObj?.payable?.status,
-          payment_method: loadObj?.payable?.payment_method,
-          transaction: loadObj?.payable?.transaction
-            ? {
-                id: loadObj?.payable?.transaction?.id,
-                reference_id: loadObj?.payable?.transaction?.reference_id,
-                external_id: loadObj?.payable?.transaction?.external_id,
-                status: loadObj?.payable?.transaction?.status
-              }
-            : null
-        }
-      : null
-  };
+function getLoadReferenceCandidates(loadObj) {
+  return [
+    loadObj?.id,
+    loadObj?.load_number,
+    loadObj?.external_id,
+    loadObj?.reference_id,
+    loadObj?.payable?.id,
+    loadObj?.payable?.reference_id,
+    loadObj?.payable?.external_id,
+    loadObj?.payable?.transaction?.id,
+    loadObj?.payable?.transaction?.reference_id,
+    loadObj?.payable?.transaction?.external_id
+  ].map(normalizeIdLike).filter(Boolean);
 }
 
 function transactionMatchesReference(tx, reference) {
   const target = normalizeIdLike(reference);
-  const hits = findReferenceHits(tx, target);
-  return hits.length > 0;
+  return getTransactionReferenceCandidates(tx).includes(target);
 }
 
 function loadMatchesReference(loadObj, reference) {
   const target = normalizeIdLike(reference);
-  const hits = findReferenceHits(loadObj, target);
-  return hits.length > 0;
+  return getLoadReferenceCandidates(loadObj).includes(target);
 }
 
 async function loadCandidatePayeesFromTransaction(tx) {
@@ -361,21 +339,19 @@ app.get("/api/search", async (req, res) => {
     console.log("=== /api/search request ===");
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
+    console.log("Max pages:", ROADSYNC_MAX_PAGES, "Page size:", ROADSYNC_PAGE_SIZE);
 
     let foundReferenceButDotMismatch = null;
-    let foundReferenceSomewhere = false;
 
-    const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
-    console.log("Transaction search path:", txPath);
-
-    const transactionsRaw = await roadsyncGet(txPath, true);
-    const transactions = toArray(transactionsRaw);
-
-    console.log("Transactions returned:", transactions.length);
-    console.log(
-      "Transaction sample:",
-      JSON.stringify(transactions.slice(0, 3).map(summarizeTransaction), null, 2)
+    // Transactions
+    console.log("Transaction base path:", TRANSACTION_SEARCH_TEMPLATE);
+    const transactions = await roadsyncGetPaginated(
+      TRANSACTION_SEARCH_TEMPLATE,
+      ROADSYNC_MAX_PAGES,
+      ROADSYNC_PAGE_SIZE
     );
+
+    console.log("Total transactions searched:", transactions.length);
 
     const exactTransactionMatches = transactions.filter(tx =>
       transactionMatchesReference(tx, reference)
@@ -385,20 +361,16 @@ app.get("/api/search", async (req, res) => {
 
     if (exactTransactionMatches.length > 0) {
       console.log(
-        "Transaction match details:",
+        "Matched transaction candidates:",
         JSON.stringify(
           exactTransactionMatches.slice(0, 5).map(tx => ({
-            summary: summarizeTransaction(tx),
-            referenceHits: findReferenceHits(tx, normalizedReference)
+            id: tx?.id,
+            referenceCandidates: getTransactionReferenceCandidates(tx)
           })),
           null,
           2
         )
       );
-    }
-
-    if (transactions.length > 0) {
-      foundReferenceSomewhere = true;
     }
 
     for (const tx of exactTransactionMatches) {
@@ -417,7 +389,6 @@ app.get("/api/search", async (req, res) => {
           transactionId: tx.id || "",
           searchedReference: normalizedReference,
           searchedDot: normalizedDot,
-          referenceHits: findReferenceHits(tx, normalizedReference),
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
@@ -463,17 +434,15 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
-    console.log("Load search path:", loadPath);
-
-    const loadsRaw = await roadsyncGet(loadPath, true);
-    const loads = toArray(loadsRaw);
-
-    console.log("Loads returned:", loads.length);
-    console.log(
-      "Load sample:",
-      JSON.stringify(loads.slice(0, 3).map(summarizeLoad), null, 2)
+    // Loads
+    console.log("Load base path:", LOAD_SEARCH_TEMPLATE);
+    const loads = await roadsyncGetPaginated(
+      LOAD_SEARCH_TEMPLATE,
+      ROADSYNC_MAX_PAGES,
+      ROADSYNC_PAGE_SIZE
     );
+
+    console.log("Total loads searched:", loads.length);
 
     const exactLoadMatches = loads.filter(loadObj =>
       loadMatchesReference(loadObj, reference)
@@ -483,20 +452,16 @@ app.get("/api/search", async (req, res) => {
 
     if (exactLoadMatches.length > 0) {
       console.log(
-        "Load match details:",
+        "Matched load candidates:",
         JSON.stringify(
           exactLoadMatches.slice(0, 5).map(loadObj => ({
-            summary: summarizeLoad(loadObj),
-            referenceHits: findReferenceHits(loadObj, normalizedReference)
+            id: loadObj?.id,
+            referenceCandidates: getLoadReferenceCandidates(loadObj)
           })),
           null,
           2
         )
       );
-    }
-
-    if (loads.length > 0) {
-      foundReferenceSomewhere = true;
     }
 
     for (const loadObj of exactLoadMatches) {
@@ -515,7 +480,6 @@ app.get("/api/search", async (req, res) => {
           loadId: loadObj.id || "",
           searchedReference: normalizedReference,
           searchedDot: normalizedDot,
-          referenceHits: findReferenceHits(loadObj, normalizedReference),
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
         continue;
@@ -551,27 +515,10 @@ app.get("/api/search", async (req, res) => {
     }
 
     if (foundReferenceButDotMismatch) {
-      console.log(
-        "Reference found but DOT mismatch:",
-        JSON.stringify(foundReferenceButDotMismatch, null, 2)
-      );
-
       return res.json({
         outcome: "reference_found_dot_mismatch",
         carrier: null,
         debug: foundReferenceButDotMismatch
-      });
-    }
-
-    if (foundReferenceSomewhere) {
-      console.log("Reference found, but lookup incomplete.");
-      return res.json({
-        outcome: "reference_found_lookup_incomplete",
-        carrier: null,
-        debug: {
-          searchedReference: normalizedReference,
-          message: "RoadSync returned records from the search endpoints, but none of those records contained the requested reference in any scanned field."
-        }
       });
     }
 
@@ -580,7 +527,9 @@ app.get("/api/search", async (req, res) => {
       carrier: null,
       debug: {
         searchedReference: normalizedReference,
-        message: "No load or payment matched that DOT/MC and reference."
+        searchedPages: ROADSYNC_MAX_PAGES,
+        searchedPageSize: ROADSYNC_PAGE_SIZE,
+        message: "No transaction or load matched that DOT/MC and reference in the paginated search window."
       }
     });
   } catch (err) {
@@ -596,7 +545,9 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE,
-    loadSearchTemplate: LOAD_SEARCH_TEMPLATE
+    loadSearchTemplate: LOAD_SEARCH_TEMPLATE,
+    maxPages: ROADSYNC_MAX_PAGES,
+    pageSize: ROADSYNC_PAGE_SIZE
   });
 });
 
