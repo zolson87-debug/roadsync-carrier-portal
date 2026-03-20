@@ -27,14 +27,23 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
     headers["broker-id"] = String(BROKER_ID);
   }
 
-  const res = await fetch(`${BASE_URL}${endpoint}`, { headers });
+  const url = `${BASE_URL}${endpoint}`;
+  console.log("RoadSync request URL:", url);
+  console.log("RoadSync broker-id header:", includeBrokerId ? String(BROKER_ID) : "(not sent)");
+
+  const res = await fetch(url, { headers });
+
+  const text = await res.text();
 
   if (!res.ok) {
-    const text = await res.text();
     throw new Error(`RoadSync API error ${res.status}: ${text}`);
   }
 
-  return res.json();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`RoadSync returned non-JSON response: ${text}`);
+  }
 }
 
 function toArray(data) {
@@ -268,67 +277,51 @@ function firstMatchingCandidate(candidates, dot) {
   return null;
 }
 
-async function tryTransactionSearches(reference) {
-  const endpoints = [
-    `/transactions?reference_id=${encodeURIComponent(reference)}`,
-    `/transactions?external_id=${encodeURIComponent(reference)}`,
-    `/transactions?id=${encodeURIComponent(reference)}`,
-    `/transactions?invoice_number=${encodeURIComponent(reference)}`
-  ];
-
-  const allMatches = [];
-
-  for (const endpoint of endpoints) {
-    try {
-      console.log("Trying transaction endpoint:", endpoint);
-      const raw = await roadsyncGet(endpoint, true);
-      const rows = toArray(raw);
-      console.log("Returned transaction rows:", rows.length);
-
-      const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
-      console.log("Exact transaction matches on this endpoint:", exactMatches.length);
-
-      for (const match of exactMatches) {
-        allMatches.push(match);
-      }
-    } catch (err) {
-      console.log("Transaction endpoint failed:", endpoint, err.message);
-    }
-  }
-
-  return allMatches;
+function summarizeTransaction(tx) {
+  return {
+    id: tx?.id,
+    reference_id: tx?.reference_id,
+    external_id: tx?.external_id,
+    broker_id: tx?.broker?.id,
+    broker_name: tx?.broker?.name,
+    payee_id: tx?.payee?.id || tx?.payee_id,
+    payee_name: tx?.payee?.payee_name,
+    invoice_numbers: Array.isArray(tx?.payables)
+      ? tx.payables.map(p => p?.invoice_number).filter(Boolean)
+      : [],
+    load_numbers: Array.isArray(tx?.payables)
+      ? tx.payables.map(p => p?.load?.load_number).filter(Boolean)
+      : []
+  };
 }
 
-async function tryLoadSearches(reference) {
-  const endpoints = [
-    `/loads?load_number=${encodeURIComponent(reference)}`,
-    `/loads?external_id=${encodeURIComponent(reference)}`,
-    `/loads?id=${encodeURIComponent(reference)}`,
-    `/loads?reference_id=${encodeURIComponent(reference)}`
-  ];
-
-  const allMatches = [];
-
-  for (const endpoint of endpoints) {
-    try {
-      console.log("Trying load endpoint:", endpoint);
-      const raw = await roadsyncGet(endpoint, true);
-      const rows = toArray(raw);
-      console.log("Returned load rows:", rows.length);
-
-      const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
-      console.log("Exact load matches on this endpoint:", exactMatches.length);
-
-      for (const match of exactMatches) {
-        allMatches.push(match);
-      }
-    } catch (err) {
-      console.log("Load endpoint failed:", endpoint, err.message);
+app.get("/api/debug-reference", async (req, res) => {
+  try {
+    const { reference } = req.query;
+    if (!reference) {
+      return res.status(400).json({ error: "reference_required" });
     }
-  }
 
-  return allMatches;
-}
+    const endpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
+    const raw = await roadsyncGet(endpoint, true);
+    const rows = toArray(raw);
+
+    return res.json({
+      env: {
+        baseUrl: BASE_URL,
+        brokerIdHeader: String(BROKER_ID)
+      },
+      endpoint,
+      count: rows.length,
+      sample: rows.slice(0, 10).map(summarizeTransaction)
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: "debug_failed",
+      details: err.message
+    });
+  }
+});
 
 app.get("/api/search", async (req, res) => {
   try {
@@ -344,15 +337,30 @@ app.get("/api/search", async (req, res) => {
     const normalizedReference = normalizeIdLike(reference);
 
     console.log("=== /api/search request ===");
+    console.log("Configured BASE_URL:", BASE_URL);
+    console.log("Configured BROKER_ID:", String(BROKER_ID));
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
 
     let foundReferenceButDotMismatch = null;
 
-    const transactionMatches = await tryTransactionSearches(reference);
-    console.log("Total exact transaction matches:", transactionMatches.length);
+    const txEndpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
+    const transactionsRaw = await roadsyncGet(txEndpoint, true);
+    const transactions = toArray(transactionsRaw);
 
-    for (const tx of transactionMatches) {
+    console.log("Transactions returned:", transactions.length);
+    console.log(
+      "Transaction sample:",
+      JSON.stringify(transactions.slice(0, 5).map(summarizeTransaction), null, 2)
+    );
+
+    const exactTransactionMatches = transactions.filter(tx =>
+      transactionMatchesReference(tx, reference)
+    );
+
+    console.log("Exact transaction matches:", exactTransactionMatches.length);
+
+    for (const tx of exactTransactionMatches) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
 
       console.log(
@@ -413,10 +421,19 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const loadMatches = await tryLoadSearches(reference);
-    console.log("Total exact load matches:", loadMatches.length);
+    const loadEndpoint = `/loads?load_number=${encodeURIComponent(reference)}`;
+    const loadsRaw = await roadsyncGet(loadEndpoint, true);
+    const loads = toArray(loadsRaw);
 
-    for (const loadObj of loadMatches) {
+    console.log("Loads returned:", loads.length);
+
+    const exactLoadMatches = loads.filter(loadObj =>
+      loadMatchesReference(loadObj, reference)
+    );
+
+    console.log("Exact load matches:", exactLoadMatches.length);
+
+    for (const loadObj of exactLoadMatches) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
 
       console.log(
@@ -492,7 +509,11 @@ app.get("/api/search", async (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    baseUrl: BASE_URL,
+    brokerId: String(BROKER_ID)
+  });
 });
 
 const port = process.env.PORT || 3000;
