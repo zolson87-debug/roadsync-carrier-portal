@@ -10,23 +10,11 @@ const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
 
-const TRANSACTION_SEARCH_TEMPLATE =
-  process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
-  "/transactions?reference_id={{reference_id}}";
-
-const LOAD_SEARCH_TEMPLATE =
-  process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
-  "/loads?load_number={{reference_id}}";
-
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
 
 function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
-}
-
-function buildTemplatePath(template, referenceId) {
-  return template.replace("{{reference_id}}", encodeURIComponent(referenceId));
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -55,27 +43,6 @@ function toArray(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
-}
-
-function summarizeTopLevel(raw) {
-  if (!raw || typeof raw !== "object") {
-    return { type: typeof raw };
-  }
-
-  const summary = {
-    topLevelKeys: Object.keys(raw),
-    itemsLength: Array.isArray(raw?.items) ? raw.items.length : null,
-    dataLength: Array.isArray(raw?.data) ? raw.data.length : null,
-    resultsLength: Array.isArray(raw?.results) ? raw.results.length : null,
-    next: raw?.next ?? null,
-    links: raw?.links ?? null,
-    meta: raw?.meta ?? null,
-    pagination: raw?.pagination ?? null,
-    page: raw?.page ?? null,
-    paging: raw?.paging ?? null
-  };
-
-  return summary;
 }
 
 function extractDotAndMc(obj, found = []) {
@@ -301,6 +268,68 @@ function firstMatchingCandidate(candidates, dot) {
   return null;
 }
 
+async function tryTransactionSearches(reference) {
+  const endpoints = [
+    `/transactions?reference_id=${encodeURIComponent(reference)}`,
+    `/transactions?external_id=${encodeURIComponent(reference)}`,
+    `/transactions?id=${encodeURIComponent(reference)}`,
+    `/transactions?invoice_number=${encodeURIComponent(reference)}`
+  ];
+
+  const allMatches = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      console.log("Trying transaction endpoint:", endpoint);
+      const raw = await roadsyncGet(endpoint, true);
+      const rows = toArray(raw);
+      console.log("Returned transaction rows:", rows.length);
+
+      const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
+      console.log("Exact transaction matches on this endpoint:", exactMatches.length);
+
+      for (const match of exactMatches) {
+        allMatches.push(match);
+      }
+    } catch (err) {
+      console.log("Transaction endpoint failed:", endpoint, err.message);
+    }
+  }
+
+  return allMatches;
+}
+
+async function tryLoadSearches(reference) {
+  const endpoints = [
+    `/loads?load_number=${encodeURIComponent(reference)}`,
+    `/loads?external_id=${encodeURIComponent(reference)}`,
+    `/loads?id=${encodeURIComponent(reference)}`,
+    `/loads?reference_id=${encodeURIComponent(reference)}`
+  ];
+
+  const allMatches = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      console.log("Trying load endpoint:", endpoint);
+      const raw = await roadsyncGet(endpoint, true);
+      const rows = toArray(raw);
+      console.log("Returned load rows:", rows.length);
+
+      const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
+      console.log("Exact load matches on this endpoint:", exactMatches.length);
+
+      for (const match of exactMatches) {
+        allMatches.push(match);
+      }
+    } catch (err) {
+      console.log("Load endpoint failed:", endpoint, err.message);
+    }
+  }
+
+  return allMatches;
+}
+
 app.get("/api/search", async (req, res) => {
   try {
     const { dot, reference } = req.query;
@@ -319,31 +348,11 @@ app.get("/api/search", async (req, res) => {
     console.log("REFERENCE:", reference, "=>", normalizedReference);
 
     let foundReferenceButDotMismatch = null;
-    let foundReferenceSomewhere = false;
 
-    const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
-    console.log("Transaction search path:", txPath);
+    const transactionMatches = await tryTransactionSearches(reference);
+    console.log("Total exact transaction matches:", transactionMatches.length);
 
-    const transactionsRaw = await roadsyncGet(txPath, true);
-    console.log(
-      "Transaction raw summary:",
-      JSON.stringify(summarizeTopLevel(transactionsRaw), null, 2)
-    );
-
-    const transactions = toArray(transactionsRaw);
-    console.log("Transactions returned:", transactions.length);
-
-    const exactTransactionMatches = transactions.filter(tx =>
-      transactionMatchesReference(tx, reference)
-    );
-
-    console.log("Exact transaction matches:", exactTransactionMatches.length);
-
-    if (transactions.length > 0) {
-      foundReferenceSomewhere = true;
-    }
-
-    for (const tx of exactTransactionMatches) {
+    for (const tx of transactionMatches) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
 
       console.log(
@@ -404,29 +413,10 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
-    console.log("Load search path:", loadPath);
+    const loadMatches = await tryLoadSearches(reference);
+    console.log("Total exact load matches:", loadMatches.length);
 
-    const loadsRaw = await roadsyncGet(loadPath, true);
-    console.log(
-      "Load raw summary:",
-      JSON.stringify(summarizeTopLevel(loadsRaw), null, 2)
-    );
-
-    const loads = toArray(loadsRaw);
-    console.log("Loads returned:", loads.length);
-
-    const exactLoadMatches = loads.filter(loadObj =>
-      loadMatchesReference(loadObj, reference)
-    );
-
-    console.log("Exact load matches:", exactLoadMatches.length);
-
-    if (loads.length > 0) {
-      foundReferenceSomewhere = true;
-    }
-
-    for (const loadObj of exactLoadMatches) {
+    for (const loadObj of loadMatches) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
 
       console.log(
@@ -484,23 +474,12 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    if (foundReferenceSomewhere) {
-      return res.json({
-        outcome: "reference_found_lookup_incomplete",
-        carrier: null,
-        debug: {
-          searchedReference: normalizedReference,
-          message: "RoadSync returned records for this reference search, but no returned record contained an exact local match for the entered reference."
-        }
-      });
-    }
-
     return res.json({
       outcome: "not_found",
       carrier: null,
       debug: {
         searchedReference: normalizedReference,
-        message: "No load or payment matched that DOT/MC and reference."
+        message: "No payment or load matched the entered reference."
       }
     });
   } catch (err) {
@@ -513,11 +492,7 @@ app.get("/api/search", async (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE,
-    loadSearchTemplate: LOAD_SEARCH_TEMPLATE
-  });
+  res.json({ ok: true });
 });
 
 const port = process.env.PORT || 3000;
