@@ -93,18 +93,29 @@ function dotOrMcMatches(obj, userValue) {
 function transactionMatchesReference(tx, reference) {
   const target = normalizeIdLike(reference);
 
-  if (normalizeIdLike(tx?.reference_id) === target) return true;
-  if (normalizeIdLike(tx?.external_id) === target) return true;
-  if (normalizeIdLike(tx?.id) === target) return true;
+  const topLevelCandidates = [
+    tx?.id,
+    tx?.reference_id,
+    tx?.external_id
+  ].map(normalizeIdLike).filter(Boolean);
+
+  if (topLevelCandidates.includes(target)) return true;
 
   for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
-    if (normalizeIdLike(p?.invoice_number) === target) return true;
-    if (normalizeIdLike(p?.po_number) === target) return true;
-    if (normalizeIdLike(p?.id) === target) return true;
-    if (normalizeIdLike(p?.load_id) === target) return true;
-    if (normalizeIdLike(p?.load?.id) === target) return true;
-    if (normalizeIdLike(p?.load?.load_number) === target) return true;
-    if (normalizeIdLike(p?.load?.external_id) === target) return true;
+    const payableCandidates = [
+      p?.id,
+      p?.invoice_number,
+      p?.po_number,
+      p?.load_id,
+      p?.reference_id,
+      p?.external_id,
+      p?.load?.id,
+      p?.load?.load_number,
+      p?.load?.external_id,
+      p?.load?.reference_id
+    ].map(normalizeIdLike).filter(Boolean);
+
+    if (payableCandidates.includes(target)) return true;
   }
 
   return false;
@@ -117,7 +128,13 @@ function loadMatchesReference(loadObj, reference) {
     loadObj?.id,
     loadObj?.load_number,
     loadObj?.external_id,
-    loadObj?.reference_id
+    loadObj?.reference_id,
+    loadObj?.payable?.id,
+    loadObj?.payable?.reference_id,
+    loadObj?.payable?.external_id,
+    loadObj?.payable?.transaction?.id,
+    loadObj?.payable?.transaction?.reference_id,
+    loadObj?.payable?.transaction?.external_id
   ].map(normalizeIdLike).filter(Boolean);
 
   return candidates.includes(target);
@@ -293,10 +310,37 @@ app.get("/api/search", async (req, res) => {
     const transactions = toArray(transactionsRaw);
 
     console.log("Transactions returned:", transactions.length);
-
-    if (transactions.length > 0) {
-      foundReferenceSomewhere = true;
-    }
+    console.log(
+      "Transaction sample:",
+      JSON.stringify(
+        transactions.slice(0, 3).map(tx => ({
+          id: tx?.id,
+          reference_id: tx?.reference_id,
+          external_id: tx?.external_id,
+          status: tx?.status,
+          payables: Array.isArray(tx?.payables)
+            ? tx.payables.slice(0, 3).map(p => ({
+                id: p?.id,
+                invoice_number: p?.invoice_number,
+                po_number: p?.po_number,
+                load_id: p?.load_id,
+                reference_id: p?.reference_id,
+                external_id: p?.external_id,
+                load: p?.load
+                  ? {
+                      id: p?.load?.id,
+                      load_number: p?.load?.load_number,
+                      external_id: p?.load?.external_id,
+                      reference_id: p?.load?.reference_id
+                    }
+                  : null
+              }))
+            : []
+        })),
+        null,
+        2
+      )
+    );
 
     const exactTransactionMatches = transactions.filter(tx =>
       transactionMatchesReference(tx, reference)
@@ -373,10 +417,37 @@ app.get("/api/search", async (req, res) => {
     const loads = toArray(loadsRaw);
 
     console.log("Loads returned:", loads.length);
-
-    if (loads.length > 0) {
-      foundReferenceSomewhere = true;
-    }
+    console.log(
+      "Load sample:",
+      JSON.stringify(
+        loads.slice(0, 3).map(loadObj => ({
+          id: loadObj?.id,
+          load_number: loadObj?.load_number,
+          external_id: loadObj?.external_id,
+          reference_id: loadObj?.reference_id,
+          status: loadObj?.status,
+          payable: loadObj?.payable
+            ? {
+                id: loadObj?.payable?.id,
+                reference_id: loadObj?.payable?.reference_id,
+                external_id: loadObj?.payable?.external_id,
+                status: loadObj?.payable?.status,
+                payment_method: loadObj?.payable?.payment_method,
+                transaction: loadObj?.payable?.transaction
+                  ? {
+                      id: loadObj?.payable?.transaction?.id,
+                      reference_id: loadObj?.payable?.transaction?.reference_id,
+                      external_id: loadObj?.payable?.transaction?.external_id,
+                      status: loadObj?.payable?.transaction?.status
+                    }
+                  : null
+              }
+            : null
+        })),
+        null,
+        2
+      )
+    );
 
     const exactLoadMatches = loads.filter(loadObj =>
       loadMatchesReference(loadObj, reference)
