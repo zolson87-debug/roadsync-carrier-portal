@@ -18,7 +18,6 @@ const LOAD_SEARCH_TEMPLATE =
   process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
   "/loads";
 
-const ROADSYNC_PAGE_SIZE = Number(process.env.ROADSYNC_PAGE_SIZE || 100);
 const ROADSYNC_MAX_PAGES = Number(process.env.ROADSYNC_MAX_PAGES || 10);
 
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
@@ -28,9 +27,46 @@ function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
-function appendPagination(endpoint, page, perPage) {
-  const separator = endpoint.includes("?") ? "&" : "?";
-  return `${endpoint}${separator}page=${page}&per_page=${perPage}`;
+function toArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
+
+function extractNextLink(raw) {
+  const candidates = [
+    raw?.next,
+    raw?.links?.next,
+    raw?.meta?.next,
+    raw?.pagination?.next,
+    raw?.paging?.next,
+    raw?.page?.next
+  ].filter(Boolean);
+
+  if (!candidates.length) return null;
+
+  const next = candidates[0];
+  if (typeof next === "string") return next;
+  if (typeof next === "object" && typeof next.href === "string") return next.href;
+
+  return null;
+}
+
+function toRelativeEndpoint(urlOrPath) {
+  if (!urlOrPath) return null;
+
+  if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
+    try {
+      const u = new URL(urlOrPath);
+      return `${u.pathname}${u.search}`;
+    } catch {
+      return null;
+    }
+  }
+
+  return urlOrPath;
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -43,7 +79,11 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
     headers["broker-id"] = String(BROKER_ID);
   }
 
-  const res = await fetch(`${BASE_URL}${endpoint}`, { headers });
+  const url = endpoint.startsWith("http://") || endpoint.startsWith("https://")
+    ? endpoint
+    : `${BASE_URL}${endpoint}`;
+
+  const res = await fetch(url, { headers });
 
   if (!res.ok) {
     const text = await res.text();
@@ -53,48 +93,44 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
   return res.json();
 }
 
-function toArray(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.results)) return data.results;
-  return [];
-}
-
-async function roadsyncGetPaginated(baseEndpoint, maxPages = ROADSYNC_MAX_PAGES, perPage = ROADSYNC_PAGE_SIZE) {
+async function roadsyncGetAllPages(baseEndpoint, maxPages = ROADSYNC_MAX_PAGES) {
   const all = [];
-  const seenIds = new Set();
+  const seen = new Set();
+  let endpoint = baseEndpoint;
 
-  for (let page = 1; page <= maxPages; page++) {
-    const endpoint = appendPagination(baseEndpoint, page, perPage);
-    console.log(`Fetching ${endpoint}`);
+  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    console.log(`Fetching page ${pageNum}: ${endpoint}`);
 
     const raw = await roadsyncGet(endpoint, true);
     const batch = toArray(raw);
+    const next = toRelativeEndpoint(extractNextLink(raw));
 
-    console.log(`Fetched page ${page}: ${batch.length} records`);
+    console.log(`Fetched page ${pageNum}: ${batch.length} records`);
+    console.log(`Next link: ${next || "none"}`);
 
-    if (!batch.length) {
-      break;
-    }
-
-    let addedThisPage = 0;
+    let added = 0;
 
     for (const item of batch) {
-      const dedupeKey = `${item?.id ?? "no-id"}-${item?.external_id ?? ""}-${item?.reference_id ?? ""}`;
+      const key = JSON.stringify([
+        item?.id ?? "",
+        item?.external_id ?? "",
+        item?.reference_id ?? ""
+      ]);
 
-      if (!seenIds.has(dedupeKey)) {
-        seenIds.add(dedupeKey);
+      if (!seen.has(key)) {
+        seen.add(key);
         all.push(item);
-        addedThisPage++;
+        added++;
       }
     }
 
-    console.log(`Added ${addedThisPage} unique records from page ${page}`);
+    console.log(`Added ${added} unique records from page ${pageNum}`);
 
-    if (batch.length < perPage) {
+    if (!next || !batch.length) {
       break;
     }
+
+    endpoint = next;
   }
 
   return all;
@@ -339,16 +375,14 @@ app.get("/api/search", async (req, res) => {
     console.log("=== /api/search request ===");
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
-    console.log("Max pages:", ROADSYNC_MAX_PAGES, "Page size:", ROADSYNC_PAGE_SIZE);
+    console.log("Max pages:", ROADSYNC_MAX_PAGES);
 
     let foundReferenceButDotMismatch = null;
 
-    // Transactions
     console.log("Transaction base path:", TRANSACTION_SEARCH_TEMPLATE);
-    const transactions = await roadsyncGetPaginated(
+    const transactions = await roadsyncGetAllPages(
       TRANSACTION_SEARCH_TEMPLATE,
-      ROADSYNC_MAX_PAGES,
-      ROADSYNC_PAGE_SIZE
+      ROADSYNC_MAX_PAGES
     );
 
     console.log("Total transactions searched:", transactions.length);
@@ -434,12 +468,10 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // Loads
     console.log("Load base path:", LOAD_SEARCH_TEMPLATE);
-    const loads = await roadsyncGetPaginated(
+    const loads = await roadsyncGetAllPages(
       LOAD_SEARCH_TEMPLATE,
-      ROADSYNC_MAX_PAGES,
-      ROADSYNC_PAGE_SIZE
+      ROADSYNC_MAX_PAGES
     );
 
     console.log("Total loads searched:", loads.length);
@@ -528,8 +560,7 @@ app.get("/api/search", async (req, res) => {
       debug: {
         searchedReference: normalizedReference,
         searchedPages: ROADSYNC_MAX_PAGES,
-        searchedPageSize: ROADSYNC_PAGE_SIZE,
-        message: "No transaction or load matched that DOT/MC and reference in the paginated search window."
+        message: "No transaction or load matched that DOT/MC and reference in the available paginated search window."
       }
     });
   } catch (err) {
@@ -546,8 +577,7 @@ app.get("/api/health", (req, res) => {
     ok: true,
     transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE,
     loadSearchTemplate: LOAD_SEARCH_TEMPLATE,
-    maxPages: ROADSYNC_MAX_PAGES,
-    pageSize: ROADSYNC_PAGE_SIZE
+    maxPages: ROADSYNC_MAX_PAGES
   });
 });
 
