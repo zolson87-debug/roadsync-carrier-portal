@@ -9,9 +9,7 @@ app.use(express.json());
 const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
-
-const PAGE_SIZE = Number(process.env.ROADSYNC_PAGE_SIZE || 100);
-const MAX_PAGES = Number(process.env.ROADSYNC_MAX_PAGES || 10);
+const SEARCH_LIMIT = Number(process.env.ROADSYNC_SEARCH_LIMIT || 150);
 
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -53,11 +51,6 @@ function toArray(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
-}
-
-function appendLimitOffset(endpoint, limit, offset) {
-  const sep = endpoint.includes("?") ? "&" : "?";
-  return `${endpoint}${sep}limit=${limit}&offset=${offset}`;
 }
 
 function extractDotAndMc(obj, found = []) {
@@ -145,7 +138,7 @@ async function loadCandidatePayeesFromTransaction(tx) {
   const candidates = [];
   const seen = new Set();
 
-  for (const p of Array.isArray(tx.payables) ? tx.payables : []) {
+  for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
     const carrierPayeeId = p?.carrier_payee?.id;
 
     if (carrierPayeeId && !seen.has(`id:${carrierPayeeId}`)) {
@@ -283,60 +276,34 @@ function firstMatchingCandidate(candidates, dot) {
   return null;
 }
 
-async function findMatchingTransaction(reference) {
-  const baseEndpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
+async function findTransactionByInvoiceNumber(reference) {
+  const endpoint = `/transactions?limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
+  console.log("Trying transaction invoice_number search:", endpoint);
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const offset = page * PAGE_SIZE;
-    const endpoint = appendLimitOffset(baseEndpoint, PAGE_SIZE, offset);
+  const raw = await roadsyncGet(endpoint, true);
+  const rows = toArray(raw);
 
-    console.log(`Searching transactions page ${page + 1}, offset ${offset}`);
-    const raw = await roadsyncGet(endpoint, true);
-    const rows = toArray(raw);
+  console.log("Transaction invoice_number rows returned:", rows.length);
 
-    console.log(`Transaction rows returned: ${rows.length}`);
+  const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
+  console.log("Exact transaction matches:", exactMatches.length);
 
-    const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
-    console.log(`Exact transaction matches on this page: ${exactMatches.length}`);
-
-    if (exactMatches.length > 0) {
-      return exactMatches[0];
-    }
-
-    if (rows.length < PAGE_SIZE) {
-      break;
-    }
-  }
-
-  return null;
+  return exactMatches[0] || null;
 }
 
-async function findMatchingLoad(reference) {
-  const baseEndpoint = `/loads?load_number=${encodeURIComponent(reference)}`;
+async function findLoadByLoadNumber(reference) {
+  const endpoint = `/loads?limit=${SEARCH_LIMIT}&load_number=${encodeURIComponent(reference)}`;
+  console.log("Trying load load_number search:", endpoint);
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const offset = page * PAGE_SIZE;
-    const endpoint = appendLimitOffset(baseEndpoint, PAGE_SIZE, offset);
+  const raw = await roadsyncGet(endpoint, true);
+  const rows = toArray(raw);
 
-    console.log(`Searching loads page ${page + 1}, offset ${offset}`);
-    const raw = await roadsyncGet(endpoint, true);
-    const rows = toArray(raw);
+  console.log("Load rows returned:", rows.length);
 
-    console.log(`Load rows returned: ${rows.length}`);
+  const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
+  console.log("Exact load matches:", exactMatches.length);
 
-    const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
-    console.log(`Exact load matches on this page: ${exactMatches.length}`);
-
-    if (exactMatches.length > 0) {
-      return exactMatches[0];
-    }
-
-    if (rows.length < PAGE_SIZE) {
-      break;
-    }
-  }
-
-  return null;
+  return exactMatches[0] || null;
 }
 
 app.get("/api/search", async (req, res) => {
@@ -357,11 +324,11 @@ app.get("/api/search", async (req, res) => {
     console.log("Configured BROKER_ID:", String(BROKER_ID));
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
-    console.log("PAGE_SIZE:", PAGE_SIZE, "MAX_PAGES:", MAX_PAGES);
+    console.log("SEARCH_LIMIT:", SEARCH_LIMIT);
 
     let foundReferenceButDotMismatch = null;
 
-    const tx = await findMatchingTransaction(reference);
+    const tx = await findTransactionByInvoiceNumber(reference);
 
     if (tx) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
@@ -423,7 +390,7 @@ app.get("/api/search", async (req, res) => {
       }
     }
 
-    const loadObj = await findMatchingLoad(reference);
+    const loadObj = await findLoadByLoadNumber(reference);
 
     if (loadObj) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
@@ -487,8 +454,6 @@ app.get("/api/search", async (req, res) => {
       carrier: null,
       debug: {
         searchedReference: normalizedReference,
-        searchedPages: MAX_PAGES,
-        pageSize: PAGE_SIZE,
         message: "No payment or load matched the entered reference."
       }
     });
@@ -506,8 +471,7 @@ app.get("/api/health", (req, res) => {
     ok: true,
     baseUrl: BASE_URL,
     brokerId: String(BROKER_ID),
-    pageSize: PAGE_SIZE,
-    maxPages: MAX_PAGES
+    searchLimit: SEARCH_LIMIT
   });
 });
 
