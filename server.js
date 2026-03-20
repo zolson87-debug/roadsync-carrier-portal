@@ -10,6 +10,9 @@ const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
 
+const PAGE_SIZE = Number(process.env.ROADSYNC_PAGE_SIZE || 100);
+const MAX_PAGES = Number(process.env.ROADSYNC_MAX_PAGES || 10);
+
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
 
@@ -29,10 +32,8 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
 
   const url = `${BASE_URL}${endpoint}`;
   console.log("RoadSync request URL:", url);
-  console.log("RoadSync broker-id header:", includeBrokerId ? String(BROKER_ID) : "(not sent)");
 
   const res = await fetch(url, { headers });
-
   const text = await res.text();
 
   if (!res.ok) {
@@ -52,6 +53,11 @@ function toArray(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
+}
+
+function appendLimitOffset(endpoint, limit, offset) {
+  const sep = endpoint.includes("?") ? "&" : "?";
+  return `${endpoint}${sep}limit=${limit}&offset=${offset}`;
 }
 
 function extractDotAndMc(obj, found = []) {
@@ -277,51 +283,61 @@ function firstMatchingCandidate(candidates, dot) {
   return null;
 }
 
-function summarizeTransaction(tx) {
-  return {
-    id: tx?.id,
-    reference_id: tx?.reference_id,
-    external_id: tx?.external_id,
-    broker_id: tx?.broker?.id,
-    broker_name: tx?.broker?.name,
-    payee_id: tx?.payee?.id || tx?.payee_id,
-    payee_name: tx?.payee?.payee_name,
-    invoice_numbers: Array.isArray(tx?.payables)
-      ? tx.payables.map(p => p?.invoice_number).filter(Boolean)
-      : [],
-    load_numbers: Array.isArray(tx?.payables)
-      ? tx.payables.map(p => p?.load?.load_number).filter(Boolean)
-      : []
-  };
-}
+async function findMatchingTransaction(reference) {
+  const baseEndpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
 
-app.get("/api/debug-reference", async (req, res) => {
-  try {
-    const { reference } = req.query;
-    if (!reference) {
-      return res.status(400).json({ error: "reference_required" });
-    }
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const offset = page * PAGE_SIZE;
+    const endpoint = appendLimitOffset(baseEndpoint, PAGE_SIZE, offset);
 
-    const endpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
+    console.log(`Searching transactions page ${page + 1}, offset ${offset}`);
     const raw = await roadsyncGet(endpoint, true);
     const rows = toArray(raw);
 
-    return res.json({
-      env: {
-        baseUrl: BASE_URL,
-        brokerIdHeader: String(BROKER_ID)
-      },
-      endpoint,
-      count: rows.length,
-      sample: rows.slice(0, 10).map(summarizeTransaction)
-    });
-  } catch (err) {
-    return res.status(500).json({
-      error: "debug_failed",
-      details: err.message
-    });
+    console.log(`Transaction rows returned: ${rows.length}`);
+
+    const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
+    console.log(`Exact transaction matches on this page: ${exactMatches.length}`);
+
+    if (exactMatches.length > 0) {
+      return exactMatches[0];
+    }
+
+    if (rows.length < PAGE_SIZE) {
+      break;
+    }
   }
-});
+
+  return null;
+}
+
+async function findMatchingLoad(reference) {
+  const baseEndpoint = `/loads?load_number=${encodeURIComponent(reference)}`;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const offset = page * PAGE_SIZE;
+    const endpoint = appendLimitOffset(baseEndpoint, PAGE_SIZE, offset);
+
+    console.log(`Searching loads page ${page + 1}, offset ${offset}`);
+    const raw = await roadsyncGet(endpoint, true);
+    const rows = toArray(raw);
+
+    console.log(`Load rows returned: ${rows.length}`);
+
+    const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
+    console.log(`Exact load matches on this page: ${exactMatches.length}`);
+
+    if (exactMatches.length > 0) {
+      return exactMatches[0];
+    }
+
+    if (rows.length < PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return null;
+}
 
 app.get("/api/search", async (req, res) => {
   try {
@@ -341,26 +357,13 @@ app.get("/api/search", async (req, res) => {
     console.log("Configured BROKER_ID:", String(BROKER_ID));
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
+    console.log("PAGE_SIZE:", PAGE_SIZE, "MAX_PAGES:", MAX_PAGES);
 
     let foundReferenceButDotMismatch = null;
 
-    const txEndpoint = `/transactions?reference_id=${encodeURIComponent(reference)}`;
-    const transactionsRaw = await roadsyncGet(txEndpoint, true);
-    const transactions = toArray(transactionsRaw);
+    const tx = await findMatchingTransaction(reference);
 
-    console.log("Transactions returned:", transactions.length);
-    console.log(
-      "Transaction sample:",
-      JSON.stringify(transactions.slice(0, 5).map(summarizeTransaction), null, 2)
-    );
-
-    const exactTransactionMatches = transactions.filter(tx =>
-      transactionMatchesReference(tx, reference)
-    );
-
-    console.log("Exact transaction matches:", exactTransactionMatches.length);
-
-    for (const tx of exactTransactionMatches) {
+    if (tx) {
       const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
 
       console.log(
@@ -378,62 +381,51 @@ app.get("/api/search", async (req, res) => {
           searchedDot: normalizedDot,
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
-        continue;
+      } else {
+        const payee = matchedCandidate.payee;
+        const payables = Array.isArray(tx.payables) ? tx.payables : [];
+        const firstPayable = payables[0] || null;
+
+        return res.json({
+          outcome: "payment_found",
+          carrier: {
+            name: payee.payee_name || payee.name || "",
+            dot: payee.dot_number || payee.usdot || "",
+            mc: payee.mc_number || payee.mc || "",
+            verified: payee.is_verified ?? "",
+            isFactoringCompany: payee.is_factoring_company ?? false,
+            payment_types: payee.available_payment_types || []
+          },
+          payment: {
+            transactionId: tx.id || "",
+            referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
+            externalId: tx.external_id || firstPayable?.load?.external_id || "",
+            transactionStatus: String(tx.status || "").toUpperCase(),
+            amount: tx.amount || "",
+            paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
+            eta: tx.eta || "",
+            createdDatetime: tx.created_datetime || "",
+            updatedDatetime: tx.updated_datetime || "",
+            matchedPayeeSource: matchedCandidate.source,
+            payables: payables.map(p => ({
+              payableId: p.id || "",
+              payableStatus: String(p.status || tx.status || "").toUpperCase(),
+              invoiceNumber: p.invoice_number || reference || "",
+              poNumber: p.po_number || "",
+              loadId: p.load_id || "",
+              loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
+              loadExternalId: p?.load?.external_id || "",
+              scheduledForDate: p.scheduled_for_date || "",
+              amount: p.amount || ""
+            }))
+          }
+        });
       }
-
-      const payee = matchedCandidate.payee;
-      const payables = Array.isArray(tx.payables) ? tx.payables : [];
-      const firstPayable = payables[0] || null;
-
-      return res.json({
-        outcome: "payment_found",
-        carrier: {
-          name: payee.payee_name || payee.name || "",
-          dot: payee.dot_number || payee.usdot || "",
-          mc: payee.mc_number || payee.mc || "",
-          verified: payee.is_verified ?? "",
-          isFactoringCompany: payee.is_factoring_company ?? false,
-          payment_types: payee.available_payment_types || []
-        },
-        payment: {
-          transactionId: tx.id || "",
-          referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
-          externalId: tx.external_id || firstPayable?.load?.external_id || "",
-          transactionStatus: String(tx.status || "").toUpperCase(),
-          amount: tx.amount || "",
-          paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
-          eta: tx.eta || "",
-          createdDatetime: tx.created_datetime || "",
-          updatedDatetime: tx.updated_datetime || "",
-          matchedPayeeSource: matchedCandidate.source,
-          payables: payables.map(p => ({
-            payableId: p.id || "",
-            payableStatus: String(p.status || tx.status || "").toUpperCase(),
-            invoiceNumber: p.invoice_number || reference || "",
-            poNumber: p.po_number || "",
-            loadId: p.load_id || "",
-            loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
-            loadExternalId: p?.load?.external_id || "",
-            scheduledForDate: p.scheduled_for_date || "",
-            amount: p.amount || ""
-          }))
-        }
-      });
     }
 
-    const loadEndpoint = `/loads?load_number=${encodeURIComponent(reference)}`;
-    const loadsRaw = await roadsyncGet(loadEndpoint, true);
-    const loads = toArray(loadsRaw);
+    const loadObj = await findMatchingLoad(reference);
 
-    console.log("Loads returned:", loads.length);
-
-    const exactLoadMatches = loads.filter(loadObj =>
-      loadMatchesReference(loadObj, reference)
-    );
-
-    console.log("Exact load matches:", exactLoadMatches.length);
-
-    for (const loadObj of exactLoadMatches) {
+    if (loadObj) {
       const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
 
       console.log(
@@ -451,36 +443,35 @@ app.get("/api/search", async (req, res) => {
           searchedDot: normalizedDot,
           checkedPayeeSources: candidatePayees.map(summarizeCandidate)
         };
-        continue;
+      } else {
+        const payee = matchedCandidate.payee;
+
+        return res.json({
+          outcome: "load_found_no_payment",
+          carrier: {
+            name: payee.payee_name || payee.name || "",
+            dot: payee.dot_number || payee.usdot || "",
+            mc: payee.mc_number || payee.mc || "",
+            verified: payee.is_verified ?? "",
+            isFactoringCompany: payee.is_factoring_company ?? false,
+            payment_types: payee.available_payment_types || []
+          },
+          load: {
+            loadId: loadObj.id || "",
+            loadNumber: loadObj.load_number || reference || "",
+            externalId: loadObj.external_id || "",
+            loadStatus: String(loadObj.status || "").toUpperCase(),
+            amount: loadObj.amount || loadObj?.payable?.amount || "",
+            payableId: loadObj?.payable?.id || "",
+            payableStatus: String(loadObj?.payable?.status || "").toUpperCase(),
+            transactionId: loadObj?.payable?.transaction?.id || "",
+            transactionStatus: String(loadObj?.payable?.transaction?.status || "").toUpperCase(),
+            paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
+            matchedPayeeSource: matchedCandidate.source
+          },
+          message: "Load found, but no payment transaction was matched."
+        });
       }
-
-      const payee = matchedCandidate.payee;
-
-      return res.json({
-        outcome: "load_found_no_payment",
-        carrier: {
-          name: payee.payee_name || payee.name || "",
-          dot: payee.dot_number || payee.usdot || "",
-          mc: payee.mc_number || payee.mc || "",
-          verified: payee.is_verified ?? "",
-          isFactoringCompany: payee.is_factoring_company ?? false,
-          payment_types: payee.available_payment_types || []
-        },
-        load: {
-          loadId: loadObj.id || "",
-          loadNumber: loadObj.load_number || reference || "",
-          externalId: loadObj.external_id || "",
-          loadStatus: String(loadObj.status || "").toUpperCase(),
-          amount: loadObj.amount || loadObj?.payable?.amount || "",
-          payableId: loadObj?.payable?.id || "",
-          payableStatus: String(loadObj?.payable?.status || "").toUpperCase(),
-          transactionId: loadObj?.payable?.transaction?.id || "",
-          transactionStatus: String(loadObj?.payable?.transaction?.status || "").toUpperCase(),
-          paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
-          matchedPayeeSource: matchedCandidate.source
-        },
-        message: "Load found, but no payment transaction was matched."
-      });
     }
 
     if (foundReferenceButDotMismatch) {
@@ -496,6 +487,8 @@ app.get("/api/search", async (req, res) => {
       carrier: null,
       debug: {
         searchedReference: normalizedReference,
+        searchedPages: MAX_PAGES,
+        pageSize: PAGE_SIZE,
         message: "No payment or load matched the entered reference."
       }
     });
@@ -512,7 +505,9 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     baseUrl: BASE_URL,
-    brokerId: String(BROKER_ID)
+    brokerId: String(BROKER_ID),
+    pageSize: PAGE_SIZE,
+    maxPages: MAX_PAGES
   });
 });
 
