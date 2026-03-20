@@ -10,16 +10,10 @@ const API_KEY = process.env.ROADSYNC_API_KEY;
 const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
 const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
 
-// Example:
-// /transactions?reference_id={{reference_id}}
-// Adjust this if your actual RoadSync filter syntax differs.
 const TRANSACTION_SEARCH_TEMPLATE =
   process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
   "/transactions?reference_id={{reference_id}}";
 
-// Example:
-// /loads?load_number={{reference_id}}
-// Adjust this if your actual RoadSync filter syntax differs.
 const LOAD_SEARCH_TEMPLATE =
   process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
   "/loads?load_number={{reference_id}}";
@@ -69,9 +63,7 @@ function dotOrMcMatches(obj, userValue) {
   const candidates = [
     obj?.dot_number,
     obj?.mc_number
-  ]
-    .map(normalizeIdLike)
-    .filter(Boolean);
+  ].map(normalizeIdLike).filter(Boolean);
 
   return candidates.includes(target);
 }
@@ -96,9 +88,7 @@ function loadMatchesReference(loadObj, reference) {
     loadObj?.id,
     loadObj?.load_number,
     loadObj?.external_id
-  ]
-    .map(normalizeIdLike)
-    .filter(Boolean);
+  ].map(normalizeIdLike).filter(Boolean);
 
   return candidates.includes(target);
 }
@@ -242,7 +232,9 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // 1) Search transactions first: if found, payment exists
+    let foundReferenceButDotMismatch = null;
+
+    // 1) Transactions
     const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
     const transactionsRaw = await roadsyncGet(txPath, true);
     const transactions = toArray(transactionsRaw);
@@ -255,6 +247,19 @@ app.get("/api/search", async (req, res) => {
       const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
 
       if (!matchedCandidate) {
+        foundReferenceButDotMismatch = {
+          scope: "transaction",
+          transactionId: tx.id || "",
+          referenceId: tx.reference_id || reference || "",
+          checkedPayeeSources: candidatePayees.map(c => ({
+            source: c.source,
+            payeeId: c.payee?.id || "",
+            payeeName: c.payee?.payee_name || "",
+            dot: c.payee?.dot_number || "",
+            mc: c.payee?.mc_number || "",
+            lookupError: c.lookupError || null
+          }))
+        };
         continue;
       }
 
@@ -298,7 +303,7 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // 2) If no payment found, search loads
+    // 2) Loads
     const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
     const loadsRaw = await roadsyncGet(loadPath, true);
     const loads = toArray(loadsRaw);
@@ -311,6 +316,19 @@ app.get("/api/search", async (req, res) => {
       const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
 
       if (!matchedCandidate) {
+        foundReferenceButDotMismatch = {
+          scope: "load",
+          loadId: loadObj.id || "",
+          loadNumber: loadObj.load_number || reference || "",
+          checkedPayeeSources: candidatePayees.map(c => ({
+            source: c.source,
+            payeeId: c.payee?.id || "",
+            payeeName: c.payee?.payee_name || "",
+            dot: c.payee?.dot_number || "",
+            mc: c.payee?.mc_number || "",
+            lookupError: c.lookupError || null
+          }))
+        };
         continue;
       }
 
@@ -343,7 +361,14 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // 3) Nothing found
+    if (foundReferenceButDotMismatch) {
+      return res.json({
+        outcome: "reference_found_dot_mismatch",
+        carrier: null,
+        debug: foundReferenceButDotMismatch
+      });
+    }
+
     return res.json({
       outcome: "not_found",
       carrier: null,
