@@ -12,13 +12,11 @@ const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspa
 
 const TRANSACTION_SEARCH_TEMPLATE =
   process.env.ROADSYNC_TRANSACTION_SEARCH_TEMPLATE ||
-  "/transactions";
+  "/transactions?reference_id={{reference_id}}";
 
 const LOAD_SEARCH_TEMPLATE =
   process.env.ROADSYNC_LOAD_SEARCH_TEMPLATE ||
-  "/loads";
-
-const ROADSYNC_MAX_PAGES = Number(process.env.ROADSYNC_MAX_PAGES || 10);
+  "/loads?load_number={{reference_id}}";
 
 if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -27,46 +25,8 @@ function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
-function toArray(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.results)) return data.results;
-  return [];
-}
-
-function extractNextLink(raw) {
-  const candidates = [
-    raw?.next,
-    raw?.links?.next,
-    raw?.meta?.next,
-    raw?.pagination?.next,
-    raw?.paging?.next,
-    raw?.page?.next
-  ].filter(Boolean);
-
-  if (!candidates.length) return null;
-
-  const next = candidates[0];
-  if (typeof next === "string") return next;
-  if (typeof next === "object" && typeof next.href === "string") return next.href;
-
-  return null;
-}
-
-function toRelativeEndpoint(urlOrPath) {
-  if (!urlOrPath) return null;
-
-  if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
-    try {
-      const u = new URL(urlOrPath);
-      return `${u.pathname}${u.search}`;
-    } catch {
-      return null;
-    }
-  }
-
-  return urlOrPath;
+function buildTemplatePath(template, referenceId) {
+  return template.replace("{{reference_id}}", encodeURIComponent(referenceId));
 }
 
 async function roadsyncGet(endpoint, includeBrokerId = true) {
@@ -79,11 +39,7 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
     headers["broker-id"] = String(BROKER_ID);
   }
 
-  const url = endpoint.startsWith("http://") || endpoint.startsWith("https://")
-    ? endpoint
-    : `${BASE_URL}${endpoint}`;
-
-  const res = await fetch(url, { headers });
+  const res = await fetch(`${BASE_URL}${endpoint}`, { headers });
 
   if (!res.ok) {
     const text = await res.text();
@@ -93,47 +49,33 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
   return res.json();
 }
 
-async function roadsyncGetAllPages(baseEndpoint, maxPages = ROADSYNC_MAX_PAGES) {
-  const all = [];
-  const seen = new Set();
-  let endpoint = baseEndpoint;
+function toArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
 
-  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-    console.log(`Fetching page ${pageNum}: ${endpoint}`);
-
-    const raw = await roadsyncGet(endpoint, true);
-    const batch = toArray(raw);
-    const next = toRelativeEndpoint(extractNextLink(raw));
-
-    console.log(`Fetched page ${pageNum}: ${batch.length} records`);
-    console.log(`Next link: ${next || "none"}`);
-
-    let added = 0;
-
-    for (const item of batch) {
-      const key = JSON.stringify([
-        item?.id ?? "",
-        item?.external_id ?? "",
-        item?.reference_id ?? ""
-      ]);
-
-      if (!seen.has(key)) {
-        seen.add(key);
-        all.push(item);
-        added++;
-      }
-    }
-
-    console.log(`Added ${added} unique records from page ${pageNum}`);
-
-    if (!next || !batch.length) {
-      break;
-    }
-
-    endpoint = next;
+function summarizeTopLevel(raw) {
+  if (!raw || typeof raw !== "object") {
+    return { type: typeof raw };
   }
 
-  return all;
+  const summary = {
+    topLevelKeys: Object.keys(raw),
+    itemsLength: Array.isArray(raw?.items) ? raw.items.length : null,
+    dataLength: Array.isArray(raw?.data) ? raw.data.length : null,
+    resultsLength: Array.isArray(raw?.results) ? raw.results.length : null,
+    next: raw?.next ?? null,
+    links: raw?.links ?? null,
+    meta: raw?.meta ?? null,
+    pagination: raw?.pagination ?? null,
+    page: raw?.page ?? null,
+    paging: raw?.paging ?? null
+  };
+
+  return summary;
 }
 
 function extractDotAndMc(obj, found = []) {
@@ -375,17 +317,21 @@ app.get("/api/search", async (req, res) => {
     console.log("=== /api/search request ===");
     console.log("DOT:", dot, "=>", normalizedDot);
     console.log("REFERENCE:", reference, "=>", normalizedReference);
-    console.log("Max pages:", ROADSYNC_MAX_PAGES);
 
     let foundReferenceButDotMismatch = null;
+    let foundReferenceSomewhere = false;
 
-    console.log("Transaction base path:", TRANSACTION_SEARCH_TEMPLATE);
-    const transactions = await roadsyncGetAllPages(
-      TRANSACTION_SEARCH_TEMPLATE,
-      ROADSYNC_MAX_PAGES
+    const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
+    console.log("Transaction search path:", txPath);
+
+    const transactionsRaw = await roadsyncGet(txPath, true);
+    console.log(
+      "Transaction raw summary:",
+      JSON.stringify(summarizeTopLevel(transactionsRaw), null, 2)
     );
 
-    console.log("Total transactions searched:", transactions.length);
+    const transactions = toArray(transactionsRaw);
+    console.log("Transactions returned:", transactions.length);
 
     const exactTransactionMatches = transactions.filter(tx =>
       transactionMatchesReference(tx, reference)
@@ -393,18 +339,8 @@ app.get("/api/search", async (req, res) => {
 
     console.log("Exact transaction matches:", exactTransactionMatches.length);
 
-    if (exactTransactionMatches.length > 0) {
-      console.log(
-        "Matched transaction candidates:",
-        JSON.stringify(
-          exactTransactionMatches.slice(0, 5).map(tx => ({
-            id: tx?.id,
-            referenceCandidates: getTransactionReferenceCandidates(tx)
-          })),
-          null,
-          2
-        )
-      );
+    if (transactions.length > 0) {
+      foundReferenceSomewhere = true;
     }
 
     for (const tx of exactTransactionMatches) {
@@ -468,13 +404,17 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    console.log("Load base path:", LOAD_SEARCH_TEMPLATE);
-    const loads = await roadsyncGetAllPages(
-      LOAD_SEARCH_TEMPLATE,
-      ROADSYNC_MAX_PAGES
+    const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
+    console.log("Load search path:", loadPath);
+
+    const loadsRaw = await roadsyncGet(loadPath, true);
+    console.log(
+      "Load raw summary:",
+      JSON.stringify(summarizeTopLevel(loadsRaw), null, 2)
     );
 
-    console.log("Total loads searched:", loads.length);
+    const loads = toArray(loadsRaw);
+    console.log("Loads returned:", loads.length);
 
     const exactLoadMatches = loads.filter(loadObj =>
       loadMatchesReference(loadObj, reference)
@@ -482,18 +422,8 @@ app.get("/api/search", async (req, res) => {
 
     console.log("Exact load matches:", exactLoadMatches.length);
 
-    if (exactLoadMatches.length > 0) {
-      console.log(
-        "Matched load candidates:",
-        JSON.stringify(
-          exactLoadMatches.slice(0, 5).map(loadObj => ({
-            id: loadObj?.id,
-            referenceCandidates: getLoadReferenceCandidates(loadObj)
-          })),
-          null,
-          2
-        )
-      );
+    if (loads.length > 0) {
+      foundReferenceSomewhere = true;
     }
 
     for (const loadObj of exactLoadMatches) {
@@ -554,13 +484,23 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
+    if (foundReferenceSomewhere) {
+      return res.json({
+        outcome: "reference_found_lookup_incomplete",
+        carrier: null,
+        debug: {
+          searchedReference: normalizedReference,
+          message: "RoadSync returned records for this reference search, but no returned record contained an exact local match for the entered reference."
+        }
+      });
+    }
+
     return res.json({
       outcome: "not_found",
       carrier: null,
       debug: {
         searchedReference: normalizedReference,
-        searchedPages: ROADSYNC_MAX_PAGES,
-        message: "No transaction or load matched that DOT/MC and reference in the available paginated search window."
+        message: "No load or payment matched that DOT/MC and reference."
       }
     });
   } catch (err) {
@@ -576,8 +516,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     transactionSearchTemplate: TRANSACTION_SEARCH_TEMPLATE,
-    loadSearchTemplate: LOAD_SEARCH_TEMPLATE,
-    maxPages: ROADSYNC_MAX_PAGES
+    loadSearchTemplate: LOAD_SEARCH_TEMPLATE
   });
 });
 
