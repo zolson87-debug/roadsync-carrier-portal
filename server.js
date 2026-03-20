@@ -233,11 +233,17 @@ app.get("/api/search", async (req, res) => {
     }
 
     let foundReferenceButDotMismatch = null;
+    let foundReferenceSomewhere = false;
 
-    // 1) Transactions
+    // Search transactions first
     const txPath = buildTemplatePath(TRANSACTION_SEARCH_TEMPLATE, reference);
     const transactionsRaw = await roadsyncGet(txPath, true);
     const transactions = toArray(transactionsRaw);
+
+    if (transactions.length > 0) {
+      foundReferenceSomewhere = true;
+    }
+
     const exactTransactionMatches = transactions.filter(tx =>
       transactionMatchesReference(tx, reference)
     );
@@ -303,10 +309,15 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // 2) Loads
+    // Search loads second
     const loadPath = buildTemplatePath(LOAD_SEARCH_TEMPLATE, reference);
     const loadsRaw = await roadsyncGet(loadPath, true);
     const loads = toArray(loadsRaw);
+
+    if (loads.length > 0) {
+      foundReferenceSomewhere = true;
+    }
+
     const exactLoadMatches = loads.filter(loadObj =>
       loadMatchesReference(loadObj, reference)
     );
@@ -366,6 +377,16 @@ app.get("/api/search", async (req, res) => {
         outcome: "reference_found_dot_mismatch",
         carrier: null,
         debug: foundReferenceButDotMismatch
+      });
+    }
+
+    if (foundReferenceSomewhere) {
+      return res.json({
+        outcome: "reference_found_lookup_incomplete",
+        carrier: null,
+        debug: {
+          message: "RoadSync returned records for this reference, but the portal could not complete a reliable carrier match."
+        }
       });
     }
 
