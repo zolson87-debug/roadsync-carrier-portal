@@ -6,31 +6,31 @@ const app = express();
 app.use(express.static(path.join(__dirname)));
 app.use(express.json());
 
-const API_KEY = process.env.ROADSYNC_API_KEY;
-const BROKER_ID = process.env.ROADSYNC_BROKER_ID;
-const BASE_URL = process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
+const ROADSYNC_API_KEY = process.env.ROADSYNC_API_KEY;
+const ROADSYNC_BROKER_ID = process.env.ROADSYNC_BROKER_ID;
+
+const RSPAY_BASE_URL =
+  process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
+
+const ADVANCE_BASE_URL =
+  process.env.ROADSYNC_ADVANCE_BASE_URL || "https://advance.roadsync.app/v1";
+
 const SEARCH_LIMIT = Number(process.env.ROADSYNC_SEARCH_LIMIT || 150);
 
-if (!API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
-if (!BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
+if (!ROADSYNC_API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
+if (!ROADSYNC_BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
 
 function normalizeIdLike(value) {
   return String(value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
-async function roadsyncGet(endpoint, includeBrokerId = true) {
-  const headers = {
-    "x-api-key": API_KEY,
-    "Content-Type": "application/json"
-  };
+function normalizeName(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
 
-  if (includeBrokerId) {
-    headers["broker-id"] = String(BROKER_ID);
-  }
-
-  const url = `${BASE_URL}${endpoint}`;
-  console.log("RoadSync request URL:", url);
-
+async function apiGet(url, headers) {
   const res = await fetch(url, { headers });
   const text = await res.text();
 
@@ -45,43 +45,33 @@ async function roadsyncGet(endpoint, includeBrokerId = true) {
   }
 }
 
+async function rsPayGet(endpoint) {
+  const url = `${RSPAY_BASE_URL}${endpoint}`;
+  console.log("RSPay request URL:", url);
+
+  return apiGet(url, {
+    "x-api-key": ROADSYNC_API_KEY,
+    "Content-Type": "application/json",
+    "broker-id": String(ROADSYNC_BROKER_ID)
+  });
+}
+
+async function advanceGet(endpoint) {
+  const url = `${ADVANCE_BASE_URL}${endpoint}`;
+  console.log("Advance request URL:", url);
+
+  return apiGet(url, {
+    "x-api-key": ROADSYNC_API_KEY,
+    "Content-Type": "application/json"
+  });
+}
+
 function toArray(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.items)) return data.items;
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
-}
-
-function extractDotAndMc(obj, found = []) {
-  if (!obj || typeof obj !== "object") return found;
-
-  for (const [key, value] of Object.entries(obj)) {
-    const keyLower = String(key).toLowerCase();
-
-    if (
-      keyLower.includes("dot") ||
-      keyLower.includes("usdot") ||
-      keyLower === "mc" ||
-      keyLower.includes("mc_number") ||
-      keyLower.includes("mcnumber")
-    ) {
-      const cleaned = normalizeIdLike(value);
-      if (cleaned) found.push(cleaned);
-    }
-
-    if (value && typeof value === "object") {
-      extractDotAndMc(value, found);
-    }
-  }
-
-  return [...new Set(found)];
-}
-
-function dotOrMcMatches(obj, userValue) {
-  const target = normalizeIdLike(userValue);
-  if (!target) return false;
-  return extractDotAndMc(obj).includes(target);
 }
 
 function getTransactionReferenceCandidates(tx) {
@@ -109,181 +99,17 @@ function getTransactionReferenceCandidates(tx) {
   return [...new Set(values.map(normalizeIdLike).filter(Boolean))];
 }
 
-function getLoadReferenceCandidates(loadObj) {
-  return [
-    loadObj?.id,
-    loadObj?.load_number,
-    loadObj?.external_id,
-    loadObj?.reference_id,
-    loadObj?.payable?.id,
-    loadObj?.payable?.reference_id,
-    loadObj?.payable?.external_id,
-    loadObj?.payable?.transaction?.id,
-    loadObj?.payable?.transaction?.reference_id,
-    loadObj?.payable?.transaction?.external_id
-  ].map(normalizeIdLike).filter(Boolean);
-}
-
 function transactionMatchesReference(tx, reference) {
   const target = normalizeIdLike(reference);
   return getTransactionReferenceCandidates(tx).includes(target);
 }
 
-function loadMatchesReference(loadObj, reference) {
-  const target = normalizeIdLike(reference);
-  return getLoadReferenceCandidates(loadObj).includes(target);
-}
-
-async function loadCandidatePayeesFromTransaction(tx) {
-  const candidates = [];
-  const seen = new Set();
-
-  for (const p of Array.isArray(tx?.payables) ? tx.payables : []) {
-    const carrierPayeeId = p?.carrier_payee?.id;
-
-    if (carrierPayeeId && !seen.has(`id:${carrierPayeeId}`)) {
-      seen.add(`id:${carrierPayeeId}`);
-      try {
-        const fullPayee = await roadsyncGet(`/payees/${carrierPayeeId}`, true);
-        candidates.push({
-          source: "payables[].carrier_payee",
-          payee: fullPayee,
-          lookupError: null
-        });
-      } catch (e) {
-        candidates.push({
-          source: "payables[].carrier_payee_lookup_failed",
-          payee: { id: carrierPayeeId },
-          lookupError: e.message
-        });
-      }
-    }
-
-    if (
-      p?.carrier_payee &&
-      !seen.has(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`)
-    ) {
-      seen.add(`inline-carrier:${p.carrier_payee.id || p.carrier_payee.payee_name}`);
-      candidates.push({
-        source: "payables[].carrier_payee_inline",
-        payee: p.carrier_payee,
-        lookupError: null
-      });
-    }
-  }
-
-  const topLevelPayeeId = tx?.payee_id || tx?.payee?.id;
-
-  if (topLevelPayeeId && !seen.has(`id:${topLevelPayeeId}`)) {
-    seen.add(`id:${topLevelPayeeId}`);
-    try {
-      const fullPayee = await roadsyncGet(`/payees/${topLevelPayeeId}`, true);
-      candidates.push({
-        source: "transaction.payee_id",
-        payee: fullPayee,
-        lookupError: null
-      });
-    } catch (e) {
-      candidates.push({
-        source: "transaction.payee_id_lookup_failed",
-        payee: { id: topLevelPayeeId },
-        lookupError: e.message
-      });
-    }
-  }
-
-  if (tx?.payee && !seen.has(`inline-payee:${tx.payee.id || tx.payee.payee_name}`)) {
-    seen.add(`inline-payee:${tx.payee.id || tx.payee.payee_name}`);
-    candidates.push({
-      source: "transaction.payee_inline",
-      payee: tx.payee,
-      lookupError: null
-    });
-  }
-
-  return candidates;
-}
-
-async function loadCandidatePayeesFromLoad(loadObj) {
-  const candidates = [];
-  const seen = new Set();
-
-  const idsToTry = [
-    loadObj?.carrier_payee?.id,
-    loadObj?.payee?.id
-  ].filter(Boolean);
-
-  for (const id of idsToTry) {
-    if (seen.has(`id:${id}`)) continue;
-    seen.add(`id:${id}`);
-
-    try {
-      const fullPayee = await roadsyncGet(`/payees/${id}`, true);
-      candidates.push({
-        source: `load.payee_id:${id}`,
-        payee: fullPayee,
-        lookupError: null
-      });
-    } catch (e) {
-      candidates.push({
-        source: `load.payee_id_lookup_failed:${id}`,
-        payee: { id },
-        lookupError: e.message
-      });
-    }
-  }
-
-  if (
-    loadObj?.carrier_payee &&
-    !seen.has(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`)
-  ) {
-    seen.add(`inline-carrier:${loadObj.carrier_payee.id || loadObj.carrier_payee.payee_name}`);
-    candidates.push({
-      source: "load.carrier_payee_inline",
-      payee: loadObj.carrier_payee,
-      lookupError: null
-    });
-  }
-
-  if (loadObj?.payee && !seen.has(`inline-payee:${loadObj.payee.id || loadObj.payee.payee_name}`)) {
-    seen.add(`inline-payee:${loadObj.payee.id || loadObj.payee.payee_name}`);
-    candidates.push({
-      source: "load.payee_inline",
-      payee: loadObj.payee,
-      lookupError: null
-    });
-  }
-
-  return candidates;
-}
-
-function summarizeCandidate(candidate) {
-  return {
-    source: candidate.source,
-    payeeId: candidate.payee?.id || "",
-    payeeName: candidate.payee?.payee_name || candidate.payee?.name || "",
-    extractedDotMcValues: extractDotAndMc(candidate.payee),
-    lookupError: candidate.lookupError || null
-  };
-}
-
-function firstMatchingCandidate(candidates, dot) {
-  for (const candidate of candidates) {
-    if (dotOrMcMatches(candidate.payee, dot)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 async function findTransactionByInvoiceNumber(reference) {
   const endpoint = `/transactions?limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
-  console.log("Trying transaction invoice_number search:", endpoint);
-
-  const raw = await roadsyncGet(endpoint, true);
+  const raw = await rsPayGet(endpoint);
   const rows = toArray(raw);
 
-  console.log("Transaction invoice_number rows returned:", rows.length);
+  console.log("Transaction rows returned:", rows.length);
 
   const exactMatches = rows.filter(tx => transactionMatchesReference(tx, reference));
   console.log("Exact transaction matches:", exactMatches.length);
@@ -291,19 +117,88 @@ async function findTransactionByInvoiceNumber(reference) {
   return exactMatches[0] || null;
 }
 
-async function findLoadByLoadNumber(reference) {
-  const endpoint = `/loads?limit=${SEARCH_LIMIT}&load_number=${encodeURIComponent(reference)}`;
-  console.log("Trying load load_number search:", endpoint);
+async function findPayeeByDot(dot) {
+  const endpoint = `/payee?page=1&search=${encodeURIComponent(dot)}`;
+  const raw = await advanceGet(endpoint);
+  const items = toArray(raw);
 
-  const raw = await roadsyncGet(endpoint, true);
-  const rows = toArray(raw);
+  console.log("Payee rows returned:", items.length);
 
-  console.log("Load rows returned:", rows.length);
+  const targetDot = normalizeIdLike(dot);
 
-  const exactMatches = rows.filter(loadObj => loadMatchesReference(loadObj, reference));
-  console.log("Exact load matches:", exactMatches.length);
+  const exactDotMatches = items.filter(item =>
+    normalizeIdLike(item?.dot_number) === targetDot
+  );
 
-  return exactMatches[0] || null;
+  console.log("Exact DOT payee matches:", exactDotMatches.length);
+
+  return exactDotMatches[0] || null;
+}
+
+function summarizeTransaction(tx) {
+  return {
+    id: tx?.id,
+    reference_id: tx?.reference_id,
+    external_id: tx?.external_id,
+    status: tx?.status,
+    payee_id: tx?.payee?.id || tx?.payee_id,
+    payee_name: tx?.payee?.payee_name || "",
+    invoice_numbers: Array.isArray(tx?.payables)
+      ? tx.payables.map(p => p?.invoice_number).filter(Boolean)
+      : [],
+    load_numbers: Array.isArray(tx?.payables)
+      ? tx.payables.map(p => p?.load?.load_number).filter(Boolean)
+      : []
+  };
+}
+
+function summarizePayee(payee) {
+  return {
+    oid: payee?.oid,
+    external_id: payee?.external_id,
+    company_id: payee?.company_id,
+    payee_name: payee?.payee_name,
+    dot_number: payee?.dot_number,
+    mc_number: payee?.mc_number,
+    funding_source_id: payee?.funding_source_id,
+    is_factoring_company: payee?.is_factoring_company,
+    available_payment_types: payee?.available_payment_types || [],
+    is_verified: payee?.is_verified ?? "",
+    city: payee?.city,
+    state: payee?.state
+  };
+}
+
+function compareTransactionToDotPayee(tx, payee) {
+  const txPayeeId = String(tx?.payee?.id || tx?.payee_id || "");
+  const dotPayeeId = String(payee?.oid || "");
+  const txPayeeName = normalizeName(tx?.payee?.payee_name || "");
+  const dotPayeeName = normalizeName(payee?.payee_name || "");
+
+  if (txPayeeId && dotPayeeId && txPayeeId === dotPayeeId) {
+    return {
+      matched: true,
+      reason: "payee_id"
+    };
+  }
+
+  if (txPayeeName && dotPayeeName && txPayeeName === dotPayeeName) {
+    return {
+      matched: true,
+      reason: "payee_name"
+    };
+  }
+
+  return {
+    matched: false,
+    reason: "mismatch",
+    debug: {
+      transactionPayeeId: txPayeeId,
+      dotPayeeId: dotPayeeId,
+      transactionPayeeName: tx?.payee?.payee_name || "",
+      dotPayeeName: payee?.payee_name || ""
+    }
+  };
 }
 
 app.get("/api/search", async (req, res) => {
@@ -316,145 +211,115 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const normalizedDot = normalizeIdLike(dot);
-    const normalizedReference = normalizeIdLike(reference);
-
     console.log("=== /api/search request ===");
-    console.log("Configured BASE_URL:", BASE_URL);
-    console.log("Configured BROKER_ID:", String(BROKER_ID));
-    console.log("DOT:", dot, "=>", normalizedDot);
-    console.log("REFERENCE:", reference, "=>", normalizedReference);
-    console.log("SEARCH_LIMIT:", SEARCH_LIMIT);
-
-    let foundReferenceButDotMismatch = null;
+    console.log("RSPAY_BASE_URL:", RSPAY_BASE_URL);
+    console.log("ADVANCE_BASE_URL:", ADVANCE_BASE_URL);
+    console.log("BROKER_ID:", String(ROADSYNC_BROKER_ID));
+    console.log("DOT:", dot);
+    console.log("REFERENCE:", reference);
 
     const tx = await findTransactionByInvoiceNumber(reference);
 
-    if (tx) {
-      const candidatePayees = await loadCandidatePayeesFromTransaction(tx);
-
-      console.log(
-        "Transaction candidate payees:",
-        JSON.stringify(candidatePayees.map(summarizeCandidate), null, 2)
-      );
-
-      const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
-
-      if (!matchedCandidate) {
-        foundReferenceButDotMismatch = {
-          scope: "transaction",
-          transactionId: tx.id || "",
-          searchedReference: normalizedReference,
-          searchedDot: normalizedDot,
-          checkedPayeeSources: candidatePayees.map(summarizeCandidate)
-        };
-      } else {
-        const payee = matchedCandidate.payee;
-        const payables = Array.isArray(tx.payables) ? tx.payables : [];
-        const firstPayable = payables[0] || null;
-
-        return res.json({
-          outcome: "payment_found",
-          carrier: {
-            name: payee.payee_name || payee.name || "",
-            dot: payee.dot_number || payee.usdot || "",
-            mc: payee.mc_number || payee.mc || "",
-            verified: payee.is_verified ?? "",
-            isFactoringCompany: payee.is_factoring_company ?? false,
-            payment_types: payee.available_payment_types || []
-          },
-          payment: {
-            transactionId: tx.id || "",
-            referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
-            externalId: tx.external_id || firstPayable?.load?.external_id || "",
-            transactionStatus: String(tx.status || "").toUpperCase(),
-            amount: tx.amount || "",
-            paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
-            eta: tx.eta || "",
-            createdDatetime: tx.created_datetime || "",
-            updatedDatetime: tx.updated_datetime || "",
-            matchedPayeeSource: matchedCandidate.source,
-            payables: payables.map(p => ({
-              payableId: p.id || "",
-              payableStatus: String(p.status || tx.status || "").toUpperCase(),
-              invoiceNumber: p.invoice_number || reference || "",
-              poNumber: p.po_number || "",
-              loadId: p.load_id || "",
-              loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
-              loadExternalId: p?.load?.external_id || "",
-              scheduledForDate: p.scheduled_for_date || "",
-              amount: p.amount || ""
-            }))
-          }
-        });
-      }
-    }
-
-    const loadObj = await findLoadByLoadNumber(reference);
-
-    if (loadObj) {
-      const candidatePayees = await loadCandidatePayeesFromLoad(loadObj);
-
-      console.log(
-        "Load candidate payees:",
-        JSON.stringify(candidatePayees.map(summarizeCandidate), null, 2)
-      );
-
-      const matchedCandidate = firstMatchingCandidate(candidatePayees, dot);
-
-      if (!matchedCandidate) {
-        foundReferenceButDotMismatch = {
-          scope: "load",
-          loadId: loadObj.id || "",
-          searchedReference: normalizedReference,
-          searchedDot: normalizedDot,
-          checkedPayeeSources: candidatePayees.map(summarizeCandidate)
-        };
-      } else {
-        const payee = matchedCandidate.payee;
-
-        return res.json({
-          outcome: "load_found_no_payment",
-          carrier: {
-            name: payee.payee_name || payee.name || "",
-            dot: payee.dot_number || payee.usdot || "",
-            mc: payee.mc_number || payee.mc || "",
-            verified: payee.is_verified ?? "",
-            isFactoringCompany: payee.is_factoring_company ?? false,
-            payment_types: payee.available_payment_types || []
-          },
-          load: {
-            loadId: loadObj.id || "",
-            loadNumber: loadObj.load_number || reference || "",
-            externalId: loadObj.external_id || "",
-            loadStatus: String(loadObj.status || "").toUpperCase(),
-            amount: loadObj.amount || loadObj?.payable?.amount || "",
-            payableId: loadObj?.payable?.id || "",
-            payableStatus: String(loadObj?.payable?.status || "").toUpperCase(),
-            transactionId: loadObj?.payable?.transaction?.id || "",
-            transactionStatus: String(loadObj?.payable?.transaction?.status || "").toUpperCase(),
-            paymentMethod: loadObj?.payable?.payment_method || loadObj?.payable?.transaction?.payment_method || "",
-            matchedPayeeSource: matchedCandidate.source
-          },
-          message: "Load found, but no payment transaction was matched."
-        });
-      }
-    }
-
-    if (foundReferenceButDotMismatch) {
+    if (!tx) {
       return res.json({
-        outcome: "reference_found_dot_mismatch",
+        outcome: "not_found",
         carrier: null,
-        debug: foundReferenceButDotMismatch
+        debug: {
+          message: "No payment matched the entered reference."
+        }
       });
     }
 
+    console.log("Matched transaction:", JSON.stringify(summarizeTransaction(tx), null, 2));
+
+    const payeeByDot = await findPayeeByDot(dot);
+
+    if (!payeeByDot) {
+      return res.json({
+        outcome: "dot_not_found",
+        carrier: null,
+        payment: {
+          transactionId: tx.id || "",
+          referenceId: tx.reference_id || reference || "",
+          transactionStatus: String(tx.status || "").toUpperCase(),
+          amount: tx.amount || "",
+          paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
+          eta: tx.eta || "",
+          createdDatetime: tx.created_datetime || "",
+          updatedDatetime: tx.updated_datetime || ""
+        },
+        debug: {
+          message: "A payment matched the reference, but the DOT number was not found in the payee directory."
+        }
+      });
+    }
+
+    console.log("Matched DOT payee:", JSON.stringify(summarizePayee(payeeByDot), null, 2));
+
+    const comparison = compareTransactionToDotPayee(tx, payeeByDot);
+
+    if (!comparison.matched) {
+      return res.json({
+        outcome: "reference_found_dot_mismatch",
+        carrier: {
+          searchedDot: dot,
+          dotLookupPayee: summarizePayee(payeeByDot)
+        },
+        payment: {
+          transactionId: tx.id || "",
+          referenceId: tx.reference_id || reference || "",
+          transactionStatus: String(tx.status || "").toUpperCase(),
+          amount: tx.amount || "",
+          paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
+          eta: tx.eta || "",
+          createdDatetime: tx.created_datetime || "",
+          updatedDatetime: tx.updated_datetime || "",
+          transactionPayee: {
+            id: tx?.payee?.id || tx?.payee_id || "",
+            name: tx?.payee?.payee_name || ""
+          }
+        },
+        debug: comparison.debug
+      });
+    }
+
+    const payables = Array.isArray(tx.payables) ? tx.payables : [];
+    const firstPayable = payables[0] || null;
+
     return res.json({
-      outcome: "not_found",
-      carrier: null,
-      debug: {
-        searchedReference: normalizedReference,
-        message: "No payment or load matched the entered reference."
+      outcome: "payment_found",
+      carrier: {
+        name: payeeByDot.payee_name || tx?.payee?.payee_name || "",
+        dot: payeeByDot.dot_number || "",
+        mc: payeeByDot.mc_number || "",
+        verified: payeeByDot.is_verified ?? "",
+        isFactoringCompany: payeeByDot.is_factoring_company ?? false,
+        payment_types: payeeByDot.available_payment_types || [],
+        matchedBy: comparison.reason
+      },
+      payment: {
+        transactionId: tx.id || "",
+        referenceId: tx.reference_id || reference || firstPayable?.invoice_number || "",
+        externalId: tx.external_id || firstPayable?.load?.external_id || "",
+        transactionStatus: String(tx.status || "").toUpperCase(),
+        amount: tx.amount || "",
+        paymentMethod: tx.payment_method_v2 || tx?.payment_method?.code || tx?.payment_method || "",
+        eta: tx.eta || "",
+        createdDatetime: tx.created_datetime || "",
+        updatedDatetime: tx.updated_datetime || "",
+        payeeId: tx?.payee?.id || tx?.payee_id || "",
+        payeeName: tx?.payee?.payee_name || "",
+        payables: payables.map(p => ({
+          payableId: p.id || "",
+          payableStatus: String(p.status || tx.status || "").toUpperCase(),
+          invoiceNumber: p.invoice_number || reference || "",
+          poNumber: p.po_number || "",
+          loadId: p.load_id || "",
+          loadNumber: p?.load?.load_number || p.invoice_number || reference || "",
+          loadExternalId: p?.load?.external_id || "",
+          scheduledForDate: p.scheduled_for_date || "",
+          amount: p.amount || ""
+        }))
       }
     });
   } catch (err) {
@@ -469,8 +334,9 @@ app.get("/api/search", async (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
-    baseUrl: BASE_URL,
-    brokerId: String(BROKER_ID),
+    rspayBaseUrl: RSPAY_BASE_URL,
+    advanceBaseUrl: ADVANCE_BASE_URL,
+    brokerId: String(ROADSYNC_BROKER_ID),
     searchLimit: SEARCH_LIMIT
   });
 });
