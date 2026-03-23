@@ -490,10 +490,10 @@
     <div class="hero-card">
       <div class="hero">
         <div>
-          <h1>Check load or payment status</h1>
+          <h1>Check payment status</h1>
           <p class="sub">
             Enter your DOT number and load number / reference ID.
-            This portal checks both load records and payment transactions.
+            This portal first checks for a matching RoadSync payment reference, then validates that the payment belongs to the entered DOT number.
           </p>
         </div>
 
@@ -517,7 +517,7 @@
       </div>
 
       <div class="footer-note">
-        Depending on the RoadSync record, this value may match the transaction reference ID, invoice number, or load number.
+        The reference entered may match the RoadSync invoice number, payment reference, or load number associated with the payment.
       </div>
     </div>
 
@@ -652,7 +652,7 @@
           document.getElementById("messageSection").innerHTML = `
             <div class="card">
               <div class="status-banner status-payment">Payment found</div>
-              <div class="footer-note">A payment transaction exists for this load/reference.</div>
+              <div class="footer-note">A payment transaction exists for this reference and the DOT number matches the registered payee.</div>
             </div>
           `;
           renderPaymentResult(data.payment);
@@ -676,11 +676,11 @@
           document.getElementById("messageSection").innerHTML = `
             <div class="card">
               <div class="status-banner status-mismatch">
-                We found the load or payment, but the DOT number did not match
+                Reference found, but the DOT number did not match
               </div>
 
               <div class="result-empty" style="margin-bottom:12px;">
-                The reference you entered was found, but the DOT number entered does not match the carrier registered on this RoadSync record.
+                We found a payment for the reference entered, but it does not appear to belong to the DOT number you entered.
               </div>
 
               <div class="footer-note">
@@ -688,25 +688,65 @@
               </div>
             </div>
           `;
+
+          if (data.payment && data.payment.transactionPayee) {
+            document.getElementById("resultSection").innerHTML = `
+              <div class="card">
+                <div class="section-title">Reference Match Details</div>
+                <div class="payment-card">
+                  <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(data.payment.referenceId || "")}</div></div>
+                  <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(data.payment.transactionId || "")}</div></div>
+                  <div class="kv"><div class="k">Payment Status</div><div class="v">${esc(data.payment.transactionStatus || "")}</div></div>
+                  <div class="kv"><div class="k">Matched Payee</div><div class="v">${esc(data.payment.transactionPayee.name || "")}</div></div>
+                </div>
+              </div>
+            `;
+          }
           return;
         }
 
-        if (data.outcome === "reference_found_lookup_incomplete") {
+        if (data.outcome === "dot_not_found") {
           document.getElementById("messageSection").innerHTML = `
             <div class="card">
               <div class="status-banner status-notfound">
-                We found a RoadSync record, but could not complete the carrier match
+                Reference found, but the DOT number was not found
               </div>
 
-              <div class="result-empty" style="margin-bottom:12px;">
-                A load or payment appears to exist for this reference, but the portal could not reliably confirm the carrier details.
+              <div class="result-empty" style="margin-bottom:16px;">
+                We found a payment for the reference entered, but the DOT number could not be found in the carrier payee directory.
+              </div>
+
+              <div style="margin-bottom:14px;">
+                <a
+                  class="cta-button"
+                  href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Register for RoadSync
+                </a>
               </div>
 
               <div class="footer-note">
-                Please email <b>payments@autosled.com</b> and we will review the record.
+                If you are already registered for RoadSync and are still seeing this message, please email <b>payments@autosled.com</b>.
               </div>
             </div>
           `;
+
+          if (data.payment) {
+            document.getElementById("resultSection").innerHTML = `
+              <div class="card">
+                <div class="section-title">Payment</div>
+                <div class="payment-card">
+                  <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(data.payment.referenceId || "")}</div></div>
+                  <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(data.payment.transactionId || "")}</div></div>
+                  <div class="kv"><div class="k">Status</div><div class="v">${esc(data.payment.transactionStatus || "")}</div></div>
+                  <div class="kv"><div class="k">Amount</div><div class="v">${esc(data.payment.amount || "")}</div></div>
+                  <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(formatPaymentMethod(data.payment.paymentMethod || ""))}</div></div>
+                </div>
+              </div>
+            `;
+          }
           return;
         }
 
@@ -714,15 +754,26 @@
           document.getElementById("messageSection").innerHTML = `
             <div class="card">
               <div class="status-banner status-notfound">
-                We could not match this DOT number and load/reference combination
+                We could not find a matching payment or load
               </div>
 
               <div class="result-empty" style="margin-bottom:16px;">
-                We were unable to find a matching load or payment for the DOT number and load/reference entered.
+                We were unable to find a matching payment or load for the DOT number and reference entered.
+              </div>
+
+              <div style="margin-bottom:14px;">
+                <a
+                  class="cta-button"
+                  href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Register for RoadSync
+                </a>
               </div>
 
               <div class="footer-note">
-                If this load or payment exists in RoadSync, please email <b>payments@autosled.com</b> so we can review the record.
+                If you are registered for RoadSync but are seeing this message, please email <b>payments@autosled.com</b>.
               </div>
             </div>
           `;
@@ -792,6 +843,12 @@
                   }
                 </div>
               </div>
+              ${carrier.matchedBy ? `
+              <div class="kv">
+                <div class="k">Match Type</div>
+                <div class="v">${esc(carrier.matchedBy)}</div>
+              </div>
+              ` : ""}
             </div>
           </div>
         </div>
@@ -855,6 +912,8 @@
             <div class="kv"><div class="k">ETA</div><div class="v">${esc(formatDateTime(payment.eta))}</div></div>
             <div class="kv"><div class="k">Created</div><div class="v">${esc(formatDateTime(payment.createdDatetime))}</div></div>
             <div class="kv"><div class="k">Updated</div><div class="v">${esc(formatDateTime(payment.updatedDatetime))}</div></div>
+            <div class="kv"><div class="k">Payee ID</div><div class="v">${esc(payment.payeeId || "")}</div></div>
+            <div class="kv"><div class="k">Payee Name</div><div class="v">${esc(payment.payeeName || "")}</div></div>
 
             ${renderPaymentTimeline(payment)}
 
