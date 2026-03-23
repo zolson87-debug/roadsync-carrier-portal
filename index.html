@@ -1,53 +1,991 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Carrier Payment Status</title>
   <style>
-    body { font-family: Arial; padding: 40px; }
-    input, button { padding: 10px; margin: 5px; }
-    .card { margin-top: 20px; padding: 20px; border: 1px solid #ccc; }
+    :root{
+      --bg:#f3f6fb;
+      --card:#ffffff;
+      --text:#0f172a;
+      --muted:#64748b;
+      --line:#e2e8f0;
+      --brand:#2563eb;
+      --brand-dark:#1d4ed8;
+      --brand-soft:#eff6ff;
+      --ok:#15803d;
+      --ok-bg:#ecfdf5;
+      --ok-line:#bbf7d0;
+      --warn:#b45309;
+      --warn-bg:#fff7ed;
+      --warn-line:#fed7aa;
+      --bad:#b91c1c;
+      --bad-bg:#fef2f2;
+      --bad-line:#fecaca;
+      --info:#1d4ed8;
+      --info-bg:#eff6ff;
+      --info-line:#bfdbfe;
+      --shadow:0 12px 32px rgba(15, 23, 42, 0.08);
+      --radius:20px;
+    }
+
+    *{ box-sizing:border-box; }
+
+    body{
+      margin:0;
+      font-family:Arial, Helvetica, sans-serif;
+      background:
+        radial-gradient(circle at top left, #eef4ff 0%, #f3f6fb 35%, #f6f8fc 100%);
+      color:var(--text);
+    }
+
+    .topbar{
+      background:linear-gradient(180deg, #0b1220 0%, #111827 100%);
+      color:#fff;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+
+    .topbar-inner{
+      max-width:1120px;
+      margin:0 auto;
+      padding:18px 24px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:18px;
+    }
+
+    .topbar-left{
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+    }
+
+    .portal-title{
+      font-size:22px;
+      font-weight:700;
+      letter-spacing:.01em;
+    }
+
+    .portal-subtitle{
+      font-size:12px;
+      color:rgba(255,255,255,.72);
+      letter-spacing:.04em;
+      text-transform:uppercase;
+    }
+
+    .autosled-logo{
+      height:56px;
+      width:auto;
+      object-fit:contain;
+      filter:drop-shadow(0 2px 12px rgba(37,99,235,.18));
+      flex:0 0 auto;
+    }
+
+    .wrap{
+      max-width:1120px;
+      margin:0 auto;
+      padding:28px 24px 40px;
+    }
+
+    .hero-card{
+      background:linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+      border:1px solid var(--line);
+      border-radius:24px;
+      box-shadow:var(--shadow);
+      padding:26px;
+      margin-bottom:20px;
+      overflow:hidden;
+      position:relative;
+    }
+
+    .hero-card::after{
+      content:"";
+      position:absolute;
+      right:-60px;
+      top:-60px;
+      width:220px;
+      height:220px;
+      border-radius:999px;
+      background:radial-gradient(circle, rgba(37,99,235,.12) 0%, rgba(37,99,235,0) 70%);
+      pointer-events:none;
+    }
+
+    .hero{
+      display:flex;
+      justify-content:space-between;
+      gap:18px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+      position:relative;
+      z-index:1;
+    }
+
+    .hero h1{
+      margin:0 0 8px 0;
+      font-size:30px;
+      line-height:1.1;
+      letter-spacing:-.02em;
+    }
+
+    .sub{
+      color:var(--muted);
+      font-size:15px;
+      margin:0;
+      line-height:1.6;
+      max-width:780px;
+    }
+
+    .hero-badge{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      background:var(--brand-soft);
+      border:1px solid #cfe0ff;
+      color:var(--brand-dark);
+      padding:10px 14px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700;
+      white-space:nowrap;
+    }
+
+    .search-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr auto;
+      gap:14px;
+      margin-top:22px;
+      position:relative;
+      z-index:1;
+    }
+
+    label{
+      display:block;
+      font-size:13px;
+      color:var(--muted);
+      margin-bottom:7px;
+      font-weight:700;
+      letter-spacing:.01em;
+    }
+
+    input{
+      width:100%;
+      padding:15px 16px;
+      border:1px solid var(--line);
+      border-radius:14px;
+      font-size:15px;
+      background:#fff;
+      color:var(--text);
+      outline:none;
+      transition:border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+    }
+
+    input:focus{
+      border-color:#93c5fd;
+      box-shadow:0 0 0 4px rgba(37,99,235,.08);
+    }
+
+    button{
+      align-self:end;
+      height:50px;
+      border:none;
+      border-radius:14px;
+      background:linear-gradient(180deg, var(--brand) 0%, var(--brand-dark) 100%);
+      color:#fff;
+      padding:0 22px;
+      font-size:15px;
+      font-weight:700;
+      cursor:pointer;
+      box-shadow:0 8px 20px rgba(37,99,235,.18);
+      transition:transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+    }
+
+    button:hover{
+      transform:translateY(-1px);
+      box-shadow:0 12px 24px rgba(37,99,235,.22);
+    }
+
+    button:disabled{
+      opacity:.75;
+      cursor:default;
+      transform:none;
+      box-shadow:none;
+    }
+
+    .footer-note{
+      color:var(--muted);
+      font-size:12px;
+      margin-top:10px;
+      line-height:1.6;
+      position:relative;
+      z-index:1;
+    }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:22px;
+      margin-bottom:18px;
+    }
+
+    .section-title{
+      font-size:12px;
+      font-weight:700;
+      color:var(--muted);
+      margin-bottom:14px;
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }
+
+    .grid-2{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:18px;
+    }
+
+    .kv{
+      display:grid;
+      grid-template-columns:180px 1fr;
+      gap:10px;
+      padding:10px 0;
+      border-bottom:1px solid var(--line);
+    }
+
+    .kv:last-child{
+      border-bottom:none;
+    }
+
+    .k{
+      color:var(--muted);
+      font-size:14px;
+    }
+
+    .v{
+      font-size:14px;
+      font-weight:700;
+      word-break:break-word;
+      color:var(--text);
+    }
+
+    .pill{
+      display:inline-block;
+      border-radius:999px;
+      background:#eff6ff;
+      color:#1d4ed8;
+      border:1px solid #cfe0ff;
+      padding:6px 10px;
+      font-size:12px;
+      font-weight:700;
+      margin:4px 6px 0 0;
+    }
+
+    .status-banner{
+      border-radius:16px;
+      padding:16px 18px;
+      font-weight:700;
+      margin-bottom:14px;
+      font-size:15px;
+    }
+
+    .status-payment{
+      background:var(--ok-bg);
+      color:var(--ok);
+      border:1px solid var(--ok-line);
+    }
+
+    .status-load{
+      background:var(--info-bg);
+      color:var(--info);
+      border:1px solid var(--info-line);
+    }
+
+    .status-notfound{
+      background:var(--warn-bg);
+      color:var(--warn);
+      border:1px solid var(--warn-line);
+    }
+
+    .status-mismatch{
+      background:var(--bad-bg);
+      color:var(--bad);
+      border:1px solid var(--bad-line);
+    }
+
+    .payment-card{
+      border:1px solid var(--line);
+      border-radius:18px;
+      padding:18px;
+      margin-top:14px;
+      background:#fcfdff;
+    }
+
+    .payment-status{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:14px;
+      flex-wrap:wrap;
+    }
+
+    .status-chip{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      border-radius:999px;
+      padding:8px 12px;
+      font-size:12px;
+      font-weight:700;
+      border:1px solid transparent;
+    }
+
+    .chip-ok{
+      color:var(--ok);
+      background:var(--ok-bg);
+      border-color:var(--ok-line);
+    }
+
+    .chip-warn{
+      color:var(--warn);
+      background:var(--warn-bg);
+      border-color:var(--warn-line);
+    }
+
+    .chip-bad{
+      color:var(--bad);
+      background:var(--bad-bg);
+      border-color:var(--bad-line);
+    }
+
+    .timeline{
+      margin-top:18px;
+      padding-top:8px;
+    }
+
+    .timeline-row{
+      display:flex;
+      gap:12px;
+      align-items:flex-start;
+      margin:12px 0;
+    }
+
+    .timeline-dot{
+      width:12px;
+      height:12px;
+      border-radius:999px;
+      margin-top:4px;
+      background:#d1d5db;
+      flex:0 0 12px;
+    }
+
+    .timeline-dot.active{
+      background:var(--brand);
+      box-shadow:0 0 0 4px rgba(37,99,235,.10);
+    }
+
+    .timeline-content{
+      flex:1;
+    }
+
+    .timeline-title{
+      font-size:13px;
+      font-weight:700;
+    }
+
+    .timeline-sub{
+      color:var(--muted);
+      font-size:12px;
+      margin-top:3px;
+      line-height:1.4;
+    }
+
+    .result-empty{
+      color:var(--muted);
+      font-size:15px;
+      line-height:1.6;
+    }
+
+    .error-box{
+      border:1px solid var(--bad-line);
+      background:var(--bad-bg);
+      color:#991b1b;
+      border-radius:14px;
+      padding:14px;
+      font-size:14px;
+    }
+
+    .cta-button{
+      display:inline-block;
+      background:linear-gradient(180deg, var(--brand) 0%, var(--brand-dark) 100%);
+      color:#fff;
+      padding:14px 22px;
+      border-radius:12px;
+      font-weight:700;
+      text-decoration:none;
+      font-size:14px;
+      box-shadow:0 8px 20px rgba(37,99,235,.18);
+    }
+
+    .cta-button:hover{
+      opacity:.96;
+    }
+
+    @media (max-width: 760px){
+      .topbar-inner{
+        padding:16px 18px;
+      }
+
+      .autosled-logo{
+        height:42px;
+      }
+
+      .wrap{
+        padding:18px 16px 32px;
+      }
+
+      .hero-card,
+      .card{
+        padding:18px;
+      }
+
+      .search-grid{
+        grid-template-columns:1fr;
+      }
+
+      .grid-2{
+        grid-template-columns:1fr !important;
+      }
+
+      .kv{
+        grid-template-columns:1fr !important;
+        gap:4px !important;
+      }
+
+      .hero h1{
+        font-size:26px;
+      }
+    }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <div class="portal-subtitle">Autosled</div>
+        <div class="portal-title">Carrier Payment Status</div>
+      </div>
 
-<h2>Carrier Payment Status</h2>
-
-<input id="dot" placeholder="DOT Number" />
-<input id="search" placeholder="Load / Invoice #" />
-<button onclick="search()">Search</button>
-
-<div id="result"></div>
-
-<script>
-async function search() {
-  const dot = document.getElementById("dot").value;
-  const searchVal = document.getElementById("search").value;
-
-  const res = await fetch(`/search?dot=${dot}&search=${searchVal}`);
-  const data = await res.json();
-
-  const el = document.getElementById("result");
-
-  if (data.status !== "success") {
-    el.innerHTML = "<div class='card'>Not Found</div>";
-    return;
-  }
-
-  const p = data.payment;
-
-  el.innerHTML = `
-    <div class="card">
-      <b>Status:</b> ${p.status}<br/>
-      <b>Amount Paid:</b> $${p.amount}<br/>
-      <b>Invoice:</b> $${p.invoice_amount}<br/>
-      <b>Fee:</b> $${p.fee}<br/>
-      <b>Reference:</b> ${p.reference_id}<br/>
-      <b>Load #:</b> ${p.load_number || "N/A"}<br/>
-      <b>Date:</b> ${p.created}
+      <img
+        src="autosled-logo.png"
+        class="autosled-logo"
+        alt="Autosled"
+      />
     </div>
-  `;
-}
-</script>
+  </div>
 
+  <div class="wrap">
+    <div class="hero-card">
+      <div class="hero">
+        <div>
+          <h1>Check payment status</h1>
+          <p class="sub">
+            Enter your DOT number and load number / reference ID.
+            This portal first checks for a matching RoadSync payment reference, then validates that the payment belongs to the entered DOT number.
+          </p>
+        </div>
+
+        <div class="hero-badge">
+          Read-only portal
+        </div>
+      </div>
+
+      <div class="search-grid">
+        <div>
+          <label for="dot">DOT Number</label>
+          <input id="dot" placeholder="Enter DOT number" />
+        </div>
+
+        <div>
+          <label for="reference">Load Number / Reference ID</label>
+          <input id="reference" placeholder="Enter load number or reference ID" />
+        </div>
+
+        <button id="searchBtn" onclick="lookup()">Search</button>
+      </div>
+
+      <div class="footer-note">
+        The reference entered may match the RoadSync invoice number, payment reference, or load number associated with the payment.
+      </div>
+    </div>
+
+    <div id="messageSection"></div>
+    <div id="carrierSection"></div>
+    <div id="resultSection"></div>
+  </div>
+
+  <script>
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, function (s) {
+        return {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        }[s];
+      });
+    }
+
+    function statusClass(value) {
+      const s = String(value || "").toLowerCase();
+
+      if (
+        s.includes("paid") ||
+        s.includes("complete") ||
+        s.includes("completed") ||
+        s.includes("delivered")
+      ) {
+        return "chip-ok";
+      }
+
+      if (
+        s.includes("processing") ||
+        s.includes("pending") ||
+        s.includes("scheduled") ||
+        s.includes("submitted") ||
+        s.includes("created")
+      ) {
+        return "chip-warn";
+      }
+
+      if (
+        s.includes("fail") ||
+        s.includes("cancel") ||
+        s.includes("void") ||
+        s.includes("reject") ||
+        s.includes("declin")
+      ) {
+        return "chip-bad";
+      }
+
+      return "chip-warn";
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+
+      return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: "America/Chicago",
+        timeZoneName: "short"
+      }).format(d);
+    }
+
+    function formatPaymentMethod(method) {
+      if (!method) return "";
+
+      const m = String(method).toUpperCase();
+
+      if (m === "RTP" || m === "WALLET_RTP") return "Instant Payment";
+      if (m === "ACH" || m === "WALLET_ACH") return "ACH";
+      if (m === "CHECK" || m === "PAPER_CHECK") return "Paper Check";
+
+      return method;
+    }
+
+    function clearResults() {
+      document.getElementById("messageSection").innerHTML = "";
+      document.getElementById("carrierSection").innerHTML = "";
+      document.getElementById("resultSection").innerHTML = "";
+    }
+
+    async function lookup() {
+      const dot = document.getElementById("dot").value.trim();
+      const reference = document.getElementById("reference").value.trim();
+      const button = document.getElementById("searchBtn");
+
+      clearResults();
+
+      if (!dot || !reference) {
+        document.getElementById("messageSection").innerHTML = `
+          <div class="card">
+            <div class="result-empty">Enter both DOT number and load number / reference ID.</div>
+          </div>
+        `;
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Searching...";
+
+      try {
+        const res = await fetch(
+          `/api/search?dot=${encodeURIComponent(dot)}&reference=${encodeURIComponent(reference)}`
+        );
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="error-box">
+                ${esc(data.error || "Search failed")}
+                ${data.details ? `<div style="margin-top:6px;">${esc(data.details)}</div>` : ""}
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        if (data.outcome === "payment_found") {
+          renderCarrier(data.carrier);
+
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-payment">Payment found</div>
+              <div class="footer-note">A payment transaction exists for this reference and the DOT number matches the registered payee.</div>
+            </div>
+          `;
+          renderPaymentResult(data.payment);
+          return;
+        }
+
+        if (data.outcome === "load_found_no_payment") {
+          renderCarrier(data.carrier);
+
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-load">Load found, payment not yet created</div>
+              <div class="footer-note">${esc(data.message || "")}</div>
+            </div>
+          `;
+          renderLoadResult(data.load);
+          return;
+        }
+
+        if (data.outcome === "reference_found_dot_mismatch") {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-mismatch">
+                Reference found, but the DOT number did not match
+              </div>
+
+              <div class="result-empty" style="margin-bottom:12px;">
+                We found a payment for the reference entered, but it does not appear to belong to the DOT number you entered.
+              </div>
+
+              <div class="footer-note">
+                If you believe this is incorrect, please email <b>payments@autosled.com</b>.
+              </div>
+            </div>
+          `;
+
+          if (data.payment && data.payment.transactionPayee) {
+            document.getElementById("resultSection").innerHTML = `
+              <div class="card">
+                <div class="section-title">Reference Match Details</div>
+                <div class="payment-card">
+                  <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(data.payment.referenceId || "")}</div></div>
+                  <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(data.payment.transactionId || "")}</div></div>
+                  <div class="kv"><div class="k">Payment Status</div><div class="v">${esc(data.payment.transactionStatus || "")}</div></div>
+                  <div class="kv"><div class="k">Matched Payee</div><div class="v">${esc(data.payment.transactionPayee.name || "")}</div></div>
+                </div>
+              </div>
+            `;
+          }
+          return;
+        }
+
+        if (data.outcome === "dot_not_found") {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-notfound">
+                Reference found, but the DOT number was not found
+              </div>
+
+              <div class="result-empty" style="margin-bottom:16px;">
+                We found a payment for the reference entered, but the DOT number could not be found in the carrier payee directory.
+              </div>
+
+              <div style="margin-bottom:14px;">
+                <a
+                  class="cta-button"
+                  href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Register for RoadSync
+                </a>
+              </div>
+
+              <div class="footer-note">
+                If you are already registered for RoadSync and are still seeing this message, please email <b>payments@autosled.com</b>.
+              </div>
+            </div>
+          `;
+
+          if (data.payment) {
+            document.getElementById("resultSection").innerHTML = `
+              <div class="card">
+                <div class="section-title">Payment</div>
+                <div class="payment-card">
+                  <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(data.payment.referenceId || "")}</div></div>
+                  <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(data.payment.transactionId || "")}</div></div>
+                  <div class="kv"><div class="k">Status</div><div class="v">${esc(data.payment.transactionStatus || "")}</div></div>
+                  <div class="kv"><div class="k">Amount</div><div class="v">${esc(data.payment.amount || "")}</div></div>
+                  <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(formatPaymentMethod(data.payment.paymentMethod || ""))}</div></div>
+                </div>
+              </div>
+            `;
+          }
+          return;
+        }
+
+        if (data.outcome === "not_found") {
+          document.getElementById("messageSection").innerHTML = `
+            <div class="card">
+              <div class="status-banner status-notfound">
+                We could not find a matching payment or load
+              </div>
+
+              <div class="result-empty" style="margin-bottom:16px;">
+                We were unable to find a matching payment or load for the DOT number and reference entered.
+              </div>
+
+              <div style="margin-bottom:14px;">
+                <a
+                  class="cta-button"
+                  href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Register for RoadSync
+                </a>
+              </div>
+
+              <div class="footer-note">
+                If you are registered for RoadSync but are seeing this message, please email <b>payments@autosled.com</b>.
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        document.getElementById("messageSection").innerHTML = `
+          <div class="card">
+            <div class="error-box">
+              Unexpected response from the portal.
+            </div>
+          </div>
+        `;
+      } catch (err) {
+        document.getElementById("messageSection").innerHTML = `
+          <div class="card">
+            <div class="error-box">
+              Unable to complete the search.
+              <div style="margin-top:6px;">${esc(err.message || "Unknown error")}</div>
+            </div>
+          </div>
+        `;
+      } finally {
+        button.disabled = false;
+        button.textContent = "Search";
+      }
+    }
+
+    function renderCarrier(carrier) {
+      const paymentTypes = Array.isArray(carrier.payment_types) ? carrier.payment_types : [];
+
+      document.getElementById("carrierSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Carrier</div>
+          <div class="grid-2">
+            <div>
+              <div class="kv">
+                <div class="k">Carrier Name</div>
+                <div class="v">${esc(carrier.name)}</div>
+              </div>
+              <div class="kv">
+                <div class="k">DOT</div>
+                <div class="v">${esc(carrier.dot)}</div>
+              </div>
+              <div class="kv">
+                <div class="k">MC</div>
+                <div class="v">${esc(carrier.mc)}</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="kv">
+                <div class="k">Verified</div>
+                <div class="v">${carrier.verified === "" ? "Not available" : esc(String(carrier.verified))}</div>
+              </div>
+              <div class="kv">
+                <div class="k">Factoring Company</div>
+                <div class="v">${carrier.isFactoringCompany ? "Yes" : "No"}</div>
+              </div>
+              <div class="kv">
+                <div class="k">Eligible Payment Methods</div>
+                <div class="v">
+                  ${
+                    paymentTypes.length
+                      ? paymentTypes.map(x => `<span class="pill">${esc(formatPaymentMethod(x))}</span>`).join("")
+                      : "Not available"
+                  }
+                </div>
+              </div>
+              ${carrier.matchedBy ? `
+              <div class="kv">
+                <div class="k">Match Type</div>
+                <div class="v">${esc(carrier.matchedBy)}</div>
+              </div>
+              ` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPaymentTimeline(payment) {
+      const status = String(payment.transactionStatus || "").toLowerCase();
+      const created = formatDateTime(payment.createdDatetime);
+      const eta = formatDateTime(payment.eta);
+
+      return `
+        <div class="timeline">
+          <div class="section-title">Payment Timeline</div>
+
+          <div class="timeline-row">
+            <div class="timeline-dot active"></div>
+            <div class="timeline-content">
+              <div class="timeline-title">Payment Created</div>
+              <div class="timeline-sub">${esc(created || "Recorded")}</div>
+            </div>
+          </div>
+
+          <div class="timeline-row">
+            <div class="timeline-dot ${status.includes("processing") || status.includes("paid") || status.includes("complete") ? "active" : ""}"></div>
+            <div class="timeline-content">
+              <div class="timeline-title">Payment Processing</div>
+              <div class="timeline-sub">${esc(status ? payment.transactionStatus : "Waiting")}</div>
+            </div>
+          </div>
+
+          <div class="timeline-row">
+            <div class="timeline-dot ${status.includes("paid") || status.includes("complete") ? "active" : ""}"></div>
+            <div class="timeline-content">
+              <div class="timeline-title">Expected Delivery</div>
+              <div class="timeline-sub">${esc(eta || "Not available")}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPaymentResult(payment) {
+      const payables = Array.isArray(payment.payables) ? payment.payables : [];
+
+      document.getElementById("resultSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Payment</div>
+          <div class="payment-card">
+            <div class="payment-status">
+              <div class="status-chip ${statusClass(payment.transactionStatus)}">
+                ${esc(payment.transactionStatus || "Unknown")}
+              </div>
+            </div>
+
+            <div class="kv"><div class="k">Reference ID</div><div class="v">${esc(payment.referenceId)}</div></div>
+            <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(payment.transactionId)}</div></div>
+            <div class="kv"><div class="k">External ID</div><div class="v">${esc(payment.externalId)}</div></div>
+            <div class="kv"><div class="k">Amount</div><div class="v">${esc(payment.amount)}</div></div>
+            <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(formatPaymentMethod(payment.paymentMethod))}</div></div>
+            <div class="kv"><div class="k">ETA</div><div class="v">${esc(formatDateTime(payment.eta))}</div></div>
+            <div class="kv"><div class="k">Created</div><div class="v">${esc(formatDateTime(payment.createdDatetime))}</div></div>
+            <div class="kv"><div class="k">Updated</div><div class="v">${esc(formatDateTime(payment.updatedDatetime))}</div></div>
+            <div class="kv"><div class="k">Payee ID</div><div class="v">${esc(payment.payeeId || "")}</div></div>
+            <div class="kv"><div class="k">Payee Name</div><div class="v">${esc(payment.payeeName || "")}</div></div>
+
+            ${renderPaymentTimeline(payment)}
+
+            ${
+              payables.length
+                ? `
+                  <div style="margin-top:18px;">
+                    <div class="section-title">Associated Payables</div>
+                    ${payables.map(renderPayableCard).join("")}
+                  </div>
+                `
+                : ""
+            }
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLoadResult(load) {
+      document.getElementById("resultSection").innerHTML = `
+        <div class="card">
+          <div class="section-title">Load</div>
+          <div class="payment-card">
+            <div class="payment-status">
+              <div class="status-chip ${statusClass(load.transactionStatus || load.payableStatus || load.loadStatus)}">
+                ${esc(load.transactionStatus || load.payableStatus || load.loadStatus || "LOAD FOUND")}
+              </div>
+            </div>
+
+            <div class="kv"><div class="k">Load Number</div><div class="v">${esc(load.loadNumber)}</div></div>
+            <div class="kv"><div class="k">Load ID</div><div class="v">${esc(load.loadId)}</div></div>
+            <div class="kv"><div class="k">External ID</div><div class="v">${esc(load.externalId)}</div></div>
+            <div class="kv"><div class="k">Amount</div><div class="v">${esc(load.amount)}</div></div>
+            <div class="kv"><div class="k">Load Status</div><div class="v">${esc(load.loadStatus)}</div></div>
+            <div class="kv"><div class="k">Payable ID</div><div class="v">${esc(load.payableId)}</div></div>
+            <div class="kv"><div class="k">Payable Status</div><div class="v">${esc(load.payableStatus)}</div></div>
+            <div class="kv"><div class="k">Transaction ID</div><div class="v">${esc(load.transactionId)}</div></div>
+            <div class="kv"><div class="k">Transaction Status</div><div class="v">${esc(load.transactionStatus)}</div></div>
+            <div class="kv"><div class="k">Payment Method</div><div class="v">${esc(formatPaymentMethod(load.paymentMethod))}</div></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPayableCard(payable) {
+      return `
+        <div class="payment-card" style="margin-top:10px; background:#ffffff;">
+          <div class="payment-status">
+            <div class="status-chip ${statusClass(payable.payableStatus)}">
+              ${esc(payable.payableStatus || "Unknown")}
+            </div>
+          </div>
+
+          <div class="kv"><div class="k">Payable ID</div><div class="v">${esc(payable.payableId)}</div></div>
+          <div class="kv"><div class="k">Invoice Number</div><div class="v">${esc(payable.invoiceNumber)}</div></div>
+          <div class="kv"><div class="k">PO Number</div><div class="v">${esc(payable.poNumber)}</div></div>
+          <div class="kv"><div class="k">Load ID</div><div class="v">${esc(payable.loadId)}</div></div>
+          <div class="kv"><div class="k">Load Number</div><div class="v">${esc(payable.loadNumber)}</div></div>
+          <div class="kv"><div class="k">Load External ID</div><div class="v">${esc(payable.loadExternalId)}</div></div>
+          <div class="kv"><div class="k">Scheduled For Date</div><div class="v">${esc(formatDateTime(payable.scheduledForDate))}</div></div>
+          <div class="kv"><div class="k">Amount</div><div class="v">${esc(payable.amount)}</div></div>
+        </div>
+      `;
+    }
+
+    document.getElementById("reference").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") lookup();
+    });
+
+    document.getElementById("dot").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") lookup();
+    });
+  </script>
 </body>
 </html>
