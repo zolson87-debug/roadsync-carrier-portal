@@ -15,7 +15,7 @@ const RSPAY_BASE_URL =
   process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
 
 const SEARCH_LIMIT = Number(process.env.ROADSYNC_SEARCH_LIMIT || 150);
-const MAX_TRANSACTION_PAGES = Number(process.env.ROADSYNC_MAX_TRANSACTION_PAGES || 5);
+const MAX_TRANSACTION_PAGES = Number(process.env.ROADSYNC_MAX_TRANSACTION_PAGES || 15);
 
 if (!ROADSYNC_API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!ROADSYNC_BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -211,12 +211,30 @@ function summarizeTransaction(tx) {
   };
 }
 
-async function fetchTransactionsPage(page, reference) {
+async function fetchTransactionsByInvoiceNumber(page, reference) {
   const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
   const raw = await rspayGet(endpoint);
   const rows = toArray(raw);
 
   console.log(`Transaction rows returned for invoice_number page ${page}:`, rows.length);
+  return rows;
+}
+
+async function fetchTransactionsByReferenceId(page, reference) {
+  const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&reference_id=${encodeURIComponent(reference)}`;
+  const raw = await rspayGet(endpoint);
+  const rows = toArray(raw);
+
+  console.log(`Transaction rows returned for reference_id page ${page}:`, rows.length);
+  return rows;
+}
+
+async function fetchTransactionsByLoadNumber(page, reference) {
+  const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&load_number=${encodeURIComponent(reference)}`;
+  const raw = await rspayGet(endpoint);
+  const rows = toArray(raw);
+
+  console.log(`Transaction rows returned for load_number page ${page}:`, rows.length);
   return rows;
 }
 
@@ -242,8 +260,20 @@ async function findCandidateTransactions(reference) {
   };
 
   for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
-    const rows = await fetchTransactionsPage(page, reference);
+    const rows = await fetchTransactionsByInvoiceNumber(page, reference);
     addRows(rows, `invoice_number_page_${page}`);
+    if (rows.length < SEARCH_LIMIT) break;
+  }
+
+  for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
+    const rows = await fetchTransactionsByReferenceId(page, reference);
+    addRows(rows, `reference_id_page_${page}`);
+    if (rows.length < SEARCH_LIMIT) break;
+  }
+
+  for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
+    const rows = await fetchTransactionsByLoadNumber(page, reference);
+    addRows(rows, `load_number_page_${page}`);
     if (rows.length < SEARCH_LIMIT) break;
   }
 
@@ -258,6 +288,16 @@ async function findCandidateTransactions(reference) {
     .map(({ tx, source }) => ({ tx, source }));
 
   console.log("Exact candidate transaction matches:", matches.length);
+  console.log(
+    "Match sources:",
+    matches.map(m => ({
+      source: m.source,
+      id: m.tx?.id,
+      reference_id: m.tx?.reference_id,
+      payee_id: m.tx?.payee?.id || m.tx?.payee_id || ""
+    }))
+  );
+
   return matches;
 }
 
@@ -383,11 +423,12 @@ app.get("/api/debug-auth", async (req, res) => {
 
   try {
     const reference = req.query.reference || "8a868168";
-    const endpoint = `/transactions?page=1&limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
-    const data = await rspayGet(endpoint);
+    const matches = await findCandidateTransactions(reference);
     result.tests.transactions = {
       ok: true,
-      count: toArray(data).length
+      count: matches.length,
+      sources: matches.map(m => m.source),
+      sample: matches.slice(0, 3).map(m => summarizeTransaction(m.tx))
     };
   } catch (err) {
     result.ok = false;
