@@ -9,13 +9,13 @@ app.use(express.json());
 
 const ROADSYNC_API_KEY = process.env.ROADSYNC_API_KEY;
 const ROADSYNC_BROKER_ID = process.env.ROADSYNC_BROKER_ID;
-const ADMIN_SYNC_KEY = process.env.ADMIN_SYNC_KEY || "";
 
 const RSPAY_BASE_URL =
   process.env.ROADSYNC_BASE_URL || "https://api.roadsync.app/rspay/v1";
 
 const SEARCH_LIMIT = Number(process.env.ROADSYNC_SEARCH_LIMIT || 150);
-const MAX_TRANSACTION_PAGES = Number(process.env.ROADSYNC_MAX_TRANSACTION_PAGES || 15);
+const MAX_TRANSACTION_PAGES = Number(process.env.ROADSYNC_MAX_TRANSACTION_PAGES || 4);
+const REQUEST_TIMEOUT_MS = Number(process.env.ROADSYNC_REQUEST_TIMEOUT_MS || 12000);
 
 if (!ROADSYNC_API_KEY) throw new Error("Missing ROADSYNC_API_KEY");
 if (!ROADSYNC_BROKER_ID) throw new Error("Missing ROADSYNC_BROKER_ID");
@@ -52,21 +52,41 @@ function toArray(data) {
 }
 
 async function apiGet(url, headers) {
-  const res = await fetch(url, { headers });
-  const text = await res.text();
-
-  if (!res.ok) {
-    const err = new Error(`RoadSync API error ${res.status}: ${text}`);
-    err.status = res.status;
-    err.url = url;
-    err.responseText = text;
-    throw err;
-  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`RoadSync returned non-JSON response: ${text}`);
+    const res = await fetch(url, {
+      headers,
+      signal: controller.signal
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      const err = new Error(`RoadSync API error ${res.status}: ${text}`);
+      err.status = res.status;
+      err.url = url;
+      err.responseText = text;
+      throw err;
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`RoadSync returned non-JSON response: ${text}`);
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      const timeoutErr = new Error(`RoadSync API request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      timeoutErr.status = 504;
+      timeoutErr.url = url;
+      timeoutErr.responseText = "";
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -200,7 +220,7 @@ function summarizeTransaction(tx) {
     reference_id: tx?.reference_id,
     external_id: tx?.external_id,
     status: tx?.status,
-    payee_id: tx?.payee?.id || tx?.payee_id,
+    payee_id: tx?.payee?.id || tx?.payee_id || "",
     payee_name: tx?.payee?.payee_name || "",
     invoice_numbers: Array.isArray(tx?.payables)
       ? tx.payables.map(p => p?.invoice_number).filter(Boolean)
@@ -211,30 +231,12 @@ function summarizeTransaction(tx) {
   };
 }
 
-async function fetchTransactionsByInvoiceNumber(page, reference) {
-  const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
+async function fetchTransactionsByInvoiceNumber(reference) {
+  const endpoint = `/transactions?page=1&limit=${SEARCH_LIMIT}&invoice_number=${encodeURIComponent(reference)}`;
   const raw = await rspayGet(endpoint);
   const rows = toArray(raw);
 
-  console.log(`Transaction rows returned for invoice_number page ${page}:`, rows.length);
-  return rows;
-}
-
-async function fetchTransactionsByReferenceId(page, reference) {
-  const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&reference_id=${encodeURIComponent(reference)}`;
-  const raw = await rspayGet(endpoint);
-  const rows = toArray(raw);
-
-  console.log(`Transaction rows returned for reference_id page ${page}:`, rows.length);
-  return rows;
-}
-
-async function fetchTransactionsByLoadNumber(page, reference) {
-  const endpoint = `/transactions?page=${page}&limit=${SEARCH_LIMIT}&load_number=${encodeURIComponent(reference)}`;
-  const raw = await rspayGet(endpoint);
-  const rows = toArray(raw);
-
-  console.log(`Transaction rows returned for load_number page ${page}:`, rows.length);
+  console.log(`Transaction rows returned for invoice_number hint:`, rows.length);
   return rows;
 }
 
@@ -259,24 +261,15 @@ async function findCandidateTransactions(reference) {
     }
   };
 
-  for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
-    const rows = await fetchTransactionsByInvoiceNumber(page, reference);
-    addRows(rows, `invoice_number_page_${page}`);
-    if (rows.length < SEARCH_LIMIT) break;
+  // 1) One invoice-number hint request
+  try {
+    const invoiceHintRows = await fetchTransactionsByInvoiceNumber(reference);
+    addRows(invoiceHintRows, "invoice_number_hint");
+  } catch (err) {
+    console.warn("Invoice-number hint request failed:", err.message);
   }
 
-  for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
-    const rows = await fetchTransactionsByReferenceId(page, reference);
-    addRows(rows, `reference_id_page_${page}`);
-    if (rows.length < SEARCH_LIMIT) break;
-  }
-
-  for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
-    const rows = await fetchTransactionsByLoadNumber(page, reference);
-    addRows(rows, `load_number_page_${page}`);
-    if (rows.length < SEARCH_LIMIT) break;
-  }
-
+  // 2) Small recent-page scan
   for (let page = 1; page <= MAX_TRANSACTION_PAGES; page += 1) {
     const rows = await fetchRecentTransactionsPage(page);
     addRows(rows, `recent_page_${page}`);
@@ -298,7 +291,10 @@ async function findCandidateTransactions(reference) {
     }))
   );
 
-  return matches;
+  return {
+    matches,
+    scannedCount: deduped.size
+  };
 }
 
 function buildPaymentResponse(tx, reference) {
@@ -344,6 +340,7 @@ app.get("/api/health", (req, res) => {
     brokerId: String(ROADSYNC_BROKER_ID),
     searchLimit: SEARCH_LIMIT,
     maxTransactionPages: MAX_TRANSACTION_PAGES,
+    requestTimeoutMs: REQUEST_TIMEOUT_MS,
     apiKeyPresent: Boolean(ROADSYNC_API_KEY),
     apiKeyMasked: maskKey(ROADSYNC_API_KEY)
   });
@@ -402,7 +399,9 @@ app.get("/api/debug-auth", async (req, res) => {
       rspayBaseUrl: RSPAY_BASE_URL,
       brokerId: String(ROADSYNC_BROKER_ID),
       apiKeyPresent: Boolean(ROADSYNC_API_KEY),
-      apiKeyMasked: maskKey(ROADSYNC_API_KEY)
+      apiKeyMasked: maskKey(ROADSYNC_API_KEY),
+      maxTransactionPages: MAX_TRANSACTION_PAGES,
+      requestTimeoutMs: REQUEST_TIMEOUT_MS
     },
     tests: {}
   };
@@ -423,12 +422,14 @@ app.get("/api/debug-auth", async (req, res) => {
 
   try {
     const reference = req.query.reference || "8a868168";
-    const matches = await findCandidateTransactions(reference);
+    const search = await findCandidateTransactions(reference);
+
     result.tests.transactions = {
       ok: true,
-      count: matches.length,
-      sources: matches.map(m => m.source),
-      sample: matches.slice(0, 3).map(m => summarizeTransaction(m.tx))
+      scannedCount: search.scannedCount,
+      matchCount: search.matches.length,
+      sources: search.matches.map(m => m.source),
+      sample: search.matches.slice(0, 3).map(m => summarizeTransaction(m.tx))
     };
   } catch (err) {
     result.ok = false;
@@ -442,21 +443,6 @@ app.get("/api/debug-auth", async (req, res) => {
   }
 
   res.status(result.ok ? 200 : 500).json(result);
-});
-
-app.get("/api/admin/test-sync-key", (req, res) => {
-  if (!ADMIN_SYNC_KEY) {
-    return res.json({
-      ok: true,
-      configured: false
-    });
-  }
-
-  return res.json({
-    ok: true,
-    configured: true,
-    matched: req.query.key === ADMIN_SYNC_KEY
-  });
 });
 
 app.get("/api/search", async (req, res) => {
@@ -501,7 +487,8 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    const candidates = await findCandidateTransactions(reference);
+    const transactionSearch = await findCandidateTransactions(reference);
+    const candidates = transactionSearch.matches;
 
     if (!candidates.length) {
       return res.json({
@@ -511,7 +498,9 @@ app.get("/api/search", async (req, res) => {
           verifiedPayee: summarizePayee(verifiedPayee)
         },
         debug: {
-          message: "No payment matched the entered reference after nested-field scan."
+          message: "No payment matched the entered reference after scanning recent transactions.",
+          scannedCount: transactionSearch.scannedCount,
+          maxTransactionPages: MAX_TRANSACTION_PAGES
         }
       });
     }
@@ -558,7 +547,10 @@ app.get("/api/search", async (req, res) => {
             name: firstReferenceMatch?.payee?.payee_name || ""
           }
         },
-        debug: comparison.debug,
+        debug: {
+          ...comparison.debug,
+          scannedCount: transactionSearch.scannedCount
+        },
         message: "We found a payment reference, but it does not match the verified DOT number entered."
       });
     }
