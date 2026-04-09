@@ -22,6 +22,9 @@
       --error-bg: #fef2f2;
       --error-border: #fca5a5;
       --error-text: #991b1b;
+      --info-bg: #eff6ff;
+      --info-border: #93c5fd;
+      --info-text: #1d4ed8;
       --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
     }
 
@@ -34,6 +37,10 @@
       font-family: Arial, Helvetica, sans-serif;
       background: var(--bg);
       color: var(--text);
+    }
+
+    a {
+      color: var(--primary);
     }
 
     .page {
@@ -50,6 +57,7 @@
     .search-card,
     .result-card,
     .message-card,
+    .setup-card,
     .footer-note {
       background: var(--card);
       border: 1px solid var(--border);
@@ -143,21 +151,35 @@
       box-shadow: 0 0 0 3px rgba(15, 76, 129, 0.12);
     }
 
-    .search-btn {
-      height: 48px;
+    .search-btn,
+    .setup-btn {
       border: none;
       border-radius: 12px;
-      padding: 0 22px;
       font-size: 15px;
       font-weight: 700;
       color: white;
       background: var(--primary);
       cursor: pointer;
       transition: background 0.2s ease, transform 0.05s ease;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .search-btn {
+      height: 48px;
+      padding: 0 22px;
       min-width: 140px;
     }
 
-    .search-btn:hover {
+    .setup-btn {
+      min-height: 48px;
+      padding: 12px 20px;
+    }
+
+    .search-btn:hover,
+    .setup-btn:hover {
       background: var(--primary-dark);
     }
 
@@ -181,7 +203,8 @@
     }
 
     .message-card,
-    .result-card {
+    .result-card,
+    .setup-card {
       padding: 22px;
     }
 
@@ -207,16 +230,84 @@
       color: var(--error-text);
     }
 
-    .message-title {
+    .message-title,
+    .setup-title {
       font-size: 18px;
       font-weight: 700;
       margin-bottom: 6px;
     }
 
-    .message-body {
+    .message-body,
+    .setup-body {
       font-size: 14px;
       line-height: 1.5;
       white-space: pre-wrap;
+    }
+
+    .setup-card {
+      margin-top: 16px;
+      border-color: var(--info-border);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    }
+
+    .setup-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .setup-title {
+      margin: 0 0 6px;
+      font-size: 24px;
+      color: var(--text);
+    }
+
+    .setup-subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 680px;
+    }
+
+    .setup-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 18px;
+      margin-top: 16px;
+    }
+
+    .setup-panel {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      background: #fff;
+    }
+
+    .setup-panel h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .setup-panel p {
+      margin: 0 0 10px;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .setup-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text);
+    }
+
+    .setup-list li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+      font-size: 14px;
     }
 
     .result-card {
@@ -310,13 +401,6 @@
       word-break: break-word;
     }
 
-    .kv .subvalue {
-      margin-top: 4px;
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.4;
-    }
-
     .footer-note {
       margin-top: 18px;
       padding: 14px 18px;
@@ -347,11 +431,13 @@
     }
 
     @media (max-width: 820px) {
-      .search-grid {
+      .search-grid,
+      .setup-grid {
         grid-template-columns: 1fr;
       }
 
-      .search-btn {
+      .search-btn,
+      .setup-btn {
         width: 100%;
       }
 
@@ -412,6 +498,56 @@
       <div id="messageCard" class="message-card hidden">
         <div id="messageTitle" class="message-title"></div>
         <div id="messageBody" class="message-body"></div>
+      </div>
+
+      <div id="setupCard" class="setup-card hidden">
+        <div class="setup-top">
+          <div>
+            <h2 id="setupTitle" class="setup-title">RoadSync Setup Required</h2>
+            <p id="setupSubtitle" class="setup-subtitle">
+              To receive payment from Autosled, please verify and set up your banking information with RoadSync.
+            </p>
+          </div>
+          <a
+            class="setup-btn"
+            href="https://eform.pandadoc.com/?eform=5be8b1a1-81af-48dd-9b13-6b4bc60ef2b8"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Complete RoadSync Setup
+          </a>
+        </div>
+
+        <div class="setup-grid">
+          <div class="setup-panel">
+            <h3>Setup & Banking Information</h3>
+            <p>
+              Hello from Autosled,
+            </p>
+            <p>
+              Thank you for reaching out with your payment inquiry. To get started, you’ll need to verify and set up your banking information with RoadSync.
+            </p>
+            <p>
+              To update your banking information or change your payment terms to activate QuickPay, email
+              <a href="mailto:autosled@roadsync.com">autosled@roadsync.com</a>.
+            </p>
+          </div>
+
+          <div class="setup-panel">
+            <h3>Autosled Payment Guidelines</h3>
+            <ul class="setup-list">
+              <li>Payment processing starts once delivery is confirmed and the BOL is verified.</li>
+              <li>QuickPay: processed within 24 hours for a 1.9% fee.</li>
+              <li>Standard ACH payments: 5 business days to process.</li>
+              <li>For example, loads dropped off on Thursday may not appear until the following Wednesday.</li>
+            </ul>
+            <p style="margin-top: 14px;">
+              After the load is delivered and the standard 5-business-day processing period has passed, you may email
+              <a href="mailto:payments@autosled.com">payments@autosled.com</a>
+              to check your payment status.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div id="resultCard" class="result-card hidden">
@@ -530,6 +666,9 @@
     const messageTitle = document.getElementById("messageTitle");
     const messageBody = document.getElementById("messageBody");
     const resultCard = document.getElementById("resultCard");
+    const setupCard = document.getElementById("setupCard");
+    const setupTitle = document.getElementById("setupTitle");
+    const setupSubtitle = document.getElementById("setupSubtitle");
 
     const resultTitle = document.getElementById("resultTitle");
     const resultSubtitle = document.getElementById("resultSubtitle");
@@ -566,6 +705,7 @@
       loadingCard.classList.add("hidden");
       messageCard.classList.add("hidden");
       resultCard.classList.add("hidden");
+      setupCard.classList.add("hidden");
     }
 
     function showLoading() {
@@ -579,6 +719,13 @@
       messageTitle.textContent = title;
       messageBody.textContent = body;
       messageCard.classList.remove("hidden");
+    }
+
+    function showSetupCard(title, subtitle) {
+      hideAllFeedback();
+      setupTitle.textContent = title;
+      setupSubtitle.textContent = subtitle;
+      setupCard.classList.remove("hidden");
     }
 
     function setBadge(status) {
@@ -636,10 +783,17 @@
       }
 
       if (outcome === "not_found") {
-        showMessage(
-          "warning",
-          "No Matching Load Found",
-          data.message || "We could not find a matching load number."
+        showSetupCard(
+          "RoadSync Setup Required",
+          "We could not find a matching load number. If you have not yet completed your RoadSync payment setup, please do so below to avoid payment delays."
+        );
+        return;
+      }
+
+      if (outcome === "dot_not_found") {
+        showSetupCard(
+          "RoadSync Setup Required",
+          "Your DOT number was not found in RoadSync. To receive payment from Autosled, please verify and set up your banking information with RoadSync."
         );
         return;
       }
